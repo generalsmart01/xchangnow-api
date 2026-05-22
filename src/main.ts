@@ -1,9 +1,11 @@
-import { NestFactory } from '@nestjs/core';
+import { NestFactory, Reflector } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { HttpLoggingInterceptor } from './common/interceptors/http-logging.interceptor';
+import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -23,6 +25,19 @@ async function bootstrap() {
   );
 
   app.useGlobalFilters(new AllExceptionsFilter());
+
+  // Order matters here:
+  //   1. HttpLoggingInterceptor — mints req.id, logs the inbound request
+  //   2. ResponseInterceptor    — wraps the controller return value in the
+  //                                { success, message, data, meta } envelope,
+  //                                reading req.id that step 1 just set
+  // After the handler returns, RxJS pipes unwind in REVERSE: ResponseInterceptor
+  // maps first, then HttpLoggingInterceptor's tap logs the outbound status.
+  const reflector = app.get(Reflector);
+  app.useGlobalInterceptors(
+    new HttpLoggingInterceptor(reflector),
+    new ResponseInterceptor(reflector),
+  );
 
   app.enableCors({
     origin: true,

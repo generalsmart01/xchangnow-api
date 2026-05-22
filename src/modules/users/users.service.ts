@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { BankAccount, Prisma, User, UserStatus } from '@prisma/client';
@@ -16,6 +17,8 @@ export type SafeUser = Omit<User, 'passwordHash'>;
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   // ------------------------------ self-service ------------------------------
@@ -208,6 +211,11 @@ export class UsersService {
       where: { id: targetUserId },
       data: { status: dto.status },
     });
+
+    this.logger.warn(
+      `User status changed userId=${targetUserId} → ${dto.status} by adminId=${adminId}` +
+        (dto.reason ? ` reason="${dto.reason}"` : ''),
+    );
 
     // Audit trail — admin actions go in admin_logs (not user_activity_logs).
     // adminId here is a regular user with ADMIN role; admin_logs.adminId is

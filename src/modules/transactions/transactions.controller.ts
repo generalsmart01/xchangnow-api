@@ -15,6 +15,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequireVerified } from '../auth/decorators/require-verified.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -130,6 +131,7 @@ export class TransactionsController {
 
   @Post('sell')
   @RequireVerified()
+  @LogMessage('SELL transaction created')
   @ApiOperation({
     summary: 'Create a SELL transaction',
     description:
@@ -161,6 +163,7 @@ export class TransactionsController {
 
   @Post('buy')
   @RequireVerified()
+  @LogMessage('BUY transaction created')
   @ApiOperation({
     summary: 'Create a BUY transaction',
     description:
@@ -185,6 +188,7 @@ export class TransactionsController {
 
   @Post('swap')
   @RequireVerified()
+  @LogMessage('SWAP transaction created')
   @ApiOperation({
     summary: 'Create a SWAP transaction',
     description:
@@ -215,6 +219,7 @@ export class TransactionsController {
   }
 
   @Get('me')
+  @LogMessage('Listed my transactions')
   @ApiOperation({
     summary: 'List MY transactions',
     description:
@@ -241,6 +246,7 @@ export class TransactionsController {
   }
 
   @Get('me/:id')
+  @LogMessage('Fetched my transaction')
   @ApiOperation({
     summary: 'Get one of MY transactions',
     description:
@@ -265,6 +271,7 @@ export class TransactionsController {
 
   @Post('me/:id/proof')
   @RequireVerified()
+  @LogMessage('Payment proof uploaded')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Upload payment proof for my transaction',
@@ -307,6 +314,7 @@ export class TransactionsController {
 
   @Get()
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Listed transactions (admin)')
   @ApiOperation({
     summary: '(Admin) List ALL transactions across users',
     description:
@@ -331,6 +339,7 @@ export class TransactionsController {
 
   @Get(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Fetched transaction (admin)')
   @ApiOperation({
     summary: '(Admin) Get any transaction by id',
     description:
@@ -359,6 +368,7 @@ export class TransactionsController {
 
   @Post(':id/approve')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Transaction approved (admin)')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: '(Admin) Approve a transaction',
@@ -393,6 +403,7 @@ export class TransactionsController {
 
   @Post(':id/reject')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Transaction rejected (admin)')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: '(Admin) Reject a transaction',
@@ -421,6 +432,7 @@ export class TransactionsController {
 
   @Post(':id/mark-completed')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Transaction marked completed (admin)')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: '(Admin) Mark a BUY/SWAP transaction COMPLETED',

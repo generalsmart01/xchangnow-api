@@ -17,6 +17,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enums/role.enum';
@@ -67,6 +68,7 @@ export class UsersController {
   // ----------------------------- self-service -----------------------------
 
   @Get('me')
+  @LogMessage('Fetched profile')
   @ApiOperation({
     summary: 'Get my full profile',
     description:
@@ -80,6 +82,7 @@ export class UsersController {
   }
 
   @Patch('me')
+  @LogMessage('Profile updated')
   @ApiOperation({
     summary: 'Update my profile',
     description:
@@ -97,6 +100,7 @@ export class UsersController {
   }
 
   @Get('me/bank-accounts')
+  @LogMessage('Listed bank accounts')
   @ApiOperation({
     summary: 'List my bank accounts',
     description:
@@ -113,6 +117,7 @@ export class UsersController {
   }
 
   @Post('me/bank-accounts')
+  @LogMessage('Bank account added')
   @ApiOperation({
     summary: 'Add a bank account',
     description:
@@ -138,6 +143,7 @@ export class UsersController {
   }
 
   @Patch('me/bank-accounts/:id')
+  @LogMessage('Bank account updated')
   @ApiOperation({
     summary: 'Update one of my bank accounts',
     description:
@@ -164,6 +170,7 @@ export class UsersController {
   }
 
   @Delete('me/bank-accounts/:id')
+  @LogMessage('Bank account deleted')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Delete a bank account',
@@ -189,6 +196,7 @@ export class UsersController {
 
   @Get()
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Listed users (admin)')
   @ApiOperation({
     summary: '(Admin) List users',
     description:
@@ -214,6 +222,7 @@ export class UsersController {
 
   @Get(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Fetched user (admin)')
   @ApiOperation({
     summary: '(Admin) Get a user by id',
     description: 'Returns the full user record. Includes soft-deleted users.',
@@ -226,6 +235,7 @@ export class UsersController {
 
   @Patch(':id/status')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('User status changed (admin)')
   @ApiOperation({
     summary: '(Admin) Change a user\'s status',
     description:

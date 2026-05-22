@@ -75,7 +75,7 @@ export class TransactionsService {
       dto.network,
     );
 
-    return this.prisma.transaction.create({
+    const tx = await this.prisma.transaction.create({
       data: {
         referenceCode: this.generateReferenceCode(),
         userId,
@@ -92,6 +92,10 @@ export class TransactionsService {
       },
       include: { walletAddress: true },
     });
+    this.logger.log(
+      `SELL created ref=${tx.referenceCode} userId=${userId} ${dto.cryptoAmount} ${dto.cryptoAsset}`,
+    );
+    return tx;
   }
 
   async createSwap(userId: string, dto: CreateSwapDto) {
@@ -115,7 +119,7 @@ export class TransactionsService {
       dto.fromNetwork,
     );
 
-    return this.prisma.transaction.create({
+    const tx = await this.prisma.transaction.create({
       data: {
         referenceCode: this.generateReferenceCode(),
         userId,
@@ -135,6 +139,10 @@ export class TransactionsService {
       },
       include: { walletAddress: true },
     });
+    this.logger.log(
+      `SWAP created ref=${tx.referenceCode} userId=${userId} ${dto.fromAmount} ${dto.fromAsset} → ${dto.toAsset}`,
+    );
+    return tx;
   }
 
   async createBuy(userId: string, dto: CreateBuyDto) {
@@ -157,6 +165,9 @@ export class TransactionsService {
         expiresAt: new Date(Date.now() + TX_EXPIRY_MS),
       },
     });
+    this.logger.log(
+      `BUY created ref=${tx.referenceCode} userId=${userId} ${dto.fiatAmount} NGN → ${dto.cryptoAsset}`,
+    );
 
     // Return company bank details + the transaction's reference code so the
     // user can put it in the bank transfer narration for admin matching.
@@ -222,7 +233,7 @@ export class TransactionsService {
 
     // Atomic: write the proof + advance state machine in one transaction.
     try {
-      return await this.prisma.$transaction(async (db) => {
+      const result = await this.prisma.$transaction(async (db) => {
         const proof = await db.transactionProof.create({
           data: {
             transactionId: tx.id,
@@ -251,6 +262,10 @@ export class TransactionsService {
 
         return proof;
       });
+      this.logger.log(
+        `Proof uploaded ref=${tx.referenceCode} type=${dto.type} → status=UNDER_REVIEW`,
+      );
+      return result;
     } catch (err) {
       // tx_hash is @unique system-wide. A collision = the user is submitting a
       // hash that's already been claimed (their own past tx or someone else's).
@@ -347,6 +362,11 @@ export class TransactionsService {
         },
       });
 
+      this.logger.log(
+        `Transaction APPROVED ref=${tx.referenceCode} type=${tx.type} by adminId=${adminId}` +
+          (tx.type === TransactionType.SELL ? ' (payout PENDING created)' : ''),
+      );
+
       return updated;
     });
   }
@@ -422,6 +442,10 @@ export class TransactionsService {
         },
       });
 
+      this.logger.log(
+        `Transaction COMPLETED ref=${tx.referenceCode} type=${tx.type} by adminId=${adminId}`,
+      );
+
       return updated;
     });
   }
@@ -465,6 +489,10 @@ export class TransactionsService {
           } as never,
         },
       });
+
+      this.logger.warn(
+        `Transaction REJECTED ref=${tx.referenceCode} type=${tx.type} by adminId=${adminId} reason="${dto.reason}"`,
+      );
 
       return updated;
     });

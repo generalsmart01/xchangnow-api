@@ -15,6 +15,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enums/role.enum';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
@@ -44,6 +45,7 @@ export class WalletsController {
   constructor(private readonly wallets: WalletsService) {}
 
   @Post()
+  @LogMessage('Wallet created (admin)')
   @ApiOperation({
     summary: '(Admin) Create a company wallet address',
     description:
@@ -65,6 +67,7 @@ export class WalletsController {
   }
 
   @Get()
+  @LogMessage('Listed wallets (admin)')
   @ApiOperation({
     summary: '(Admin) List wallets',
     description:
@@ -81,6 +84,7 @@ export class WalletsController {
   }
 
   @Get(':id')
+  @LogMessage('Fetched wallet (admin)')
   @ApiOperation({ summary: '(Admin) Get a wallet by id' })
   @ApiResponse({ status: 200, schema: { example: WALLET_EXAMPLE } })
   @ApiResponse({ status: 404, description: 'Wallet not found.' })
@@ -89,6 +93,7 @@ export class WalletsController {
   }
 
   @Patch(':id')
+  @LogMessage('Wallet updated (admin)')
   @ApiOperation({
     summary: '(Admin) Update a wallet\'s label or active state',
     description:
@@ -107,6 +112,7 @@ export class WalletsController {
   }
 
   @Delete(':id')
+  @LogMessage('Wallet deactivated (admin)')
   @ApiOperation({
     summary: '(Admin) Deactivate a wallet (soft delete)',
     description:

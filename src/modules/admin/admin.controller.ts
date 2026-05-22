@@ -5,6 +5,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enums/role.enum';
@@ -19,6 +20,7 @@ import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 export class AdminController {
   @Get('ping')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Admin pong')
   @ApiOperation({
     summary: '(Admin) Sanity check the JWT + Roles guard chain',
     description:

@@ -13,6 +13,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enums/role.enum';
@@ -63,6 +64,7 @@ export class PayoutsController {
   // ------------------------- user-facing -------------------------
 
   @Get('me')
+  @LogMessage('Listed my payouts')
   @ApiOperation({
     summary: 'List MY payouts',
     description:
@@ -89,6 +91,7 @@ export class PayoutsController {
   }
 
   @Get('me/:id')
+  @LogMessage('Fetched my payout')
   @ApiOperation({
     summary: 'Get one of MY payouts',
     description:
@@ -108,6 +111,7 @@ export class PayoutsController {
 
   @Get()
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Listed payouts (admin)')
   @ApiOperation({
     summary: '(Admin) List ALL payouts',
     description:
@@ -131,6 +135,7 @@ export class PayoutsController {
 
   @Get(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Fetched payout (admin)')
   @ApiOperation({ summary: '(Admin) Get any payout by id' })
   @ApiResponse({ status: 200, schema: { example: PAYOUT_EXAMPLE } })
   @ApiResponse({ status: 404, description: 'Payout not found.' })
@@ -140,6 +145,7 @@ export class PayoutsController {
 
   @Patch(':id/status')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Payout status updated (admin)')
   @ApiOperation({
     summary: '(Admin) Transition a payout\'s status',
     description:

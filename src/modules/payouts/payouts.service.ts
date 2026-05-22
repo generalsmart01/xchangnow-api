@@ -140,6 +140,20 @@ export class PayoutsService {
         });
       }
 
+      // Use WARN for FAILED so it stands out yellow in the terminal; PAID is
+      // worth highlighting too because it cascades to Transaction COMPLETED.
+      const severity =
+        dto.status === PayoutStatus.FAILED
+          ? 'warn'
+          : ('log' as 'log' | 'warn');
+      this.logger[severity](
+        `Payout ${payout.status} → ${dto.status} ref=${payout.reference} adminId=${adminId}` +
+          (dto.status === PayoutStatus.PAID
+            ? ' (Transaction → COMPLETED)'
+            : '') +
+          (dto.failureReason ? ` reason="${dto.failureReason}"` : ''),
+      );
+
       return updated;
     });
   }

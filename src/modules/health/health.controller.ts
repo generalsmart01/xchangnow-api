@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { HealthService } from './health.service';
 
 @ApiTags('Health')
@@ -8,6 +9,7 @@ export class HealthController {
   constructor(private readonly healthService: HealthService) {}
 
   @Get()
+  @LogMessage('Health check OK')
   @ApiOperation({
     summary: 'Liveness check',
     description:

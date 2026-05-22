@@ -17,6 +17,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enums/role.enum';
@@ -68,6 +69,7 @@ export class RatesController {
   constructor(private readonly rates: RatesService) {}
 
   @Get('current')
+  @LogMessage('Fetched current rates')
   @ApiOperation({
     summary: 'Get the latest rate per asset',
     description:
@@ -89,6 +91,7 @@ export class RatesController {
 
   @Post()
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Rate snapshot recorded (admin)')
   @ApiOperation({
     summary: '(Admin) Record a new rate snapshot',
     description:
@@ -111,6 +114,7 @@ export class RatesController {
 
   @Get()
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Listed rate history (admin)')
   @ApiOperation({
     summary: '(Admin) List rate history',
     description:
@@ -134,6 +138,7 @@ export class RatesController {
 
   @Get(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Fetched rate snapshot (admin)')
   @ApiOperation({ summary: '(Admin) Get a rate snapshot by id' })
   @ApiResponse({ status: 200, schema: { example: RATE_EXAMPLE } })
   @ApiResponse({ status: 404, description: 'Rate not found.' })
@@ -143,6 +148,7 @@ export class RatesController {
 
   @Patch(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Rate updated (admin)')
   @ApiOperation({
     summary: '(Admin) Edit an existing rate row',
     description:
@@ -162,6 +168,7 @@ export class RatesController {
 
   @Delete(':id')
   @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('Rate deleted (admin)')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: '(Admin) Delete a rate row',

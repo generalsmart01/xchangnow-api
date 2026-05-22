@@ -8,6 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import {
+  Prisma,
   RiskSeverity,
   SecurityEventType,
   User,
@@ -69,15 +70,41 @@ export class AuthService {
     const rounds = this.config.get<number>('BCRYPT_ROUNDS', 12);
     const passwordHash = await bcrypt.hash(dto.password, rounds);
 
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        passwordHash,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        phoneNumber: dto.phoneNumber,
-      },
-    });
+    // The email pre-check above gives fast, clean feedback for the common case,
+    // but two unique columns can still collide here:
+    //   - phone_number (no pre-check at all)
+    //   - email (race window between the pre-check and the create)
+    // Catch P2002 from the create itself so both cases surface as a 409, not a
+    // 500. err.meta.target tells us which column collided.
+    let user: User;
+    try {
+      user = await this.prisma.user.create({
+        data: {
+          email,
+          passwordHash,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          phoneNumber: dto.phoneNumber,
+        },
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const target = (err.meta?.target as string[] | undefined)?.[0];
+        if (target === 'phone_number') {
+          throw new ConflictException('Phone number already registered');
+        }
+        if (target === 'email') {
+          throw new ConflictException('Email already registered');
+        }
+        throw new ConflictException('Account already exists');
+      }
+      throw err;
+    }
+
+    this.logger.log(`Registered user id=${user.id} email=${user.email}`);
 
     // Issue + send a verification email so the user can transition out of
     // PENDING_VERIFICATION. The raw token is also returned in dev mode so
@@ -168,6 +195,7 @@ export class AuthService {
     };
 
     const tokens = await this.issueTokensForUser(updatedUser, enrichedCtx);
+    this.logger.log(`Login success id=${updatedUser.id} email=${updatedUser.email} ip=${ctx.ipAddress ?? '-'}`);
     return { user: this.sanitize(updatedUser), tokens };
   }
 
@@ -206,6 +234,7 @@ export class AuthService {
       where: { id: sessionId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    this.logger.log(`Session revoked sessionId=${sessionId}`);
   }
 
   // ---------------------------------------------------------------------------
@@ -246,6 +275,7 @@ export class AuthService {
       }),
     ]);
 
+    this.logger.log(`Email verified userId=${record.userId}`);
     return { message: 'Email verified' };
   }
 
@@ -308,6 +338,7 @@ export class AuthService {
     });
 
     await this.email.sendPasswordResetEmail(user.email, rawToken);
+    this.logger.log(`Password reset token issued userId=${user.id}`);
 
     // Dev affordance — DO NOT keep in production. Lets tests skip log scraping.
     const isDev =
@@ -366,6 +397,9 @@ export class AuthService {
       }),
     ]);
 
+    this.logger.warn(
+      `Password reset completed userId=${record.userId} — all sessions revoked`,
+    );
     return {
       message: 'Password reset successful. Please log in with your new password.',
     };

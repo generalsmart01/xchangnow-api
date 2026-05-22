@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Request } from 'express';
+import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { AuthService, SessionContext } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -57,6 +58,7 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
+  @LogMessage('User registered')
   @ApiOperation({
     summary: 'Register a new user',
     description:
@@ -91,6 +93,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @LogMessage('User logged in')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Log in with email + password',
@@ -120,6 +123,7 @@ export class AuthController {
   }
 
   @Post('refresh')
+  @LogMessage('Tokens refreshed')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Rotate an access token using a refresh token',
@@ -144,6 +148,7 @@ export class AuthController {
   @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @Post('logout')
+  @LogMessage('User logged out')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Log out — revoke the current session',
@@ -161,6 +166,7 @@ export class AuthController {
   @ApiBearerAuth('JWT-auth')
   @UseGuards(JwtAuthGuard)
   @Get('me')
+  @LogMessage('Fetched current user')
   @ApiOperation({
     summary: 'Get the current user from the access token',
     description:
@@ -184,6 +190,7 @@ export class AuthController {
   }
 
   @Post('verify-email')
+  @LogMessage('Email verified')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Verify the email address',
@@ -207,6 +214,7 @@ export class AuthController {
   }
 
   @Post('resend-verification')
+  @LogMessage('Verification email re-sent')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Resend the email verification message',
@@ -231,6 +239,7 @@ export class AuthController {
   }
 
   @Post('forgot-password')
+  @LogMessage('Password reset requested')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Start a password reset',
@@ -256,6 +265,7 @@ export class AuthController {
   }
 
   @Post('reset-password')
+  @LogMessage('Password reset completed')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Finalise a password reset',
