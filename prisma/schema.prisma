@@ -112,7 +112,8 @@ model User {
   email           String     @unique
   phoneNumber     String?    @unique @map("phone_number")
   passwordHash    String     @map("password_hash")
-  fullName        String     @map("full_name")
+  firstName       String     @map("first_name")
+  lastName        String     @map("last_name")
   role            UserRole   @default(USER)
   status          UserStatus @default(PENDING_VERIFICATION)
   isEmailVerified Boolean    @default(false) @map("is_email_verified")

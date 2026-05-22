@@ -33,7 +33,8 @@ export class UsersService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: {
-        fullName: dto.fullName,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
         phoneNumber: dto.phoneNumber,
       },
     });
@@ -162,7 +163,8 @@ export class UsersService {
         ? {
             OR: [
               { email: { contains: query.search, mode: 'insensitive' } },
-              { fullName: { contains: query.search, mode: 'insensitive' } },
+              { firstName: { contains: query.search, mode: 'insensitive' } },
+              { lastName: { contains: query.search, mode: 'insensitive' } },
             ],
           }
         : {}),

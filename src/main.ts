@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
@@ -30,12 +31,41 @@ async function bootstrap() {
 
   app.enableShutdownHooks(); // so PrismaService.onModuleDestroy fires on SIGTERM
 
+  // ---------------- Swagger / OpenAPI ----------------
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('XchangeNow API')
+    .setDescription(
+      'Fintech backend: auth (with email verification + password reset), ' +
+        'users, wallets, transactions (BUY/SELL/SWAP), payouts, rates, security.',
+    )
+    .setVersion('0.1.0')
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        name: 'Authorization',
+        description: 'Paste the accessToken from POST /api/auth/login',
+        in: 'header',
+      },
+      'JWT-auth', // a name we can later reference via @ApiBearerAuth('JWT-auth')
+    )
+    .build();
+
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('docs', app, document, {
+    swaggerOptions: {
+      persistAuthorization: true, // remember the bearer token across page reloads
+    },
+  });
+
   await app.listen(port);
 
   Logger.log(
     `XchangeNow API running on http://localhost:${port}/api`,
     'Bootstrap',
   );
+  Logger.log(`Swagger UI at http://localhost:${port}/docs`, 'Bootstrap');
 }
 
 bootstrap();

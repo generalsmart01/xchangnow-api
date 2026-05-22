@@ -73,7 +73,8 @@ export class AuthService {
       data: {
         email,
         passwordHash,
-        fullName: dto.fullName,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
         phoneNumber: dto.phoneNumber,
       },
     });
