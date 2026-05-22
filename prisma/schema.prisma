@@ -1,0 +1,547 @@
+// XchangeNow - Prisma Production Schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+  OPS
+  CUSTOMER_SERVICE
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+  DEACTIVATED
+}
+
+enum TransactionType {
+  BUY
+  SELL
+}
+
+enum TransactionStatus {
+  PENDING
+  AWAITING_PAYMENT
+  UNDER_REVIEW
+  APPROVED
+  COMPLETED
+  REJECTED
+  CANCELLED
+  EXPIRED
+}
+
+enum ProofType {
+  BANK_TRANSFER_RECEIPT
+  CRYPTO_TX_HASH
+  OTHER
+}
+
+enum CryptoAsset {
+  BTC
+  ETH
+  USDT
+  USDC
+}
+
+enum CryptoNetwork {
+  BITCOIN
+  ETHEREUM
+  TRON
+  BSC
+  POLYGON
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  IN_APP
+}
+
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+}
+
+enum RiskSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum SecurityEventType {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  PASSWORD_RESET
+  VPN_DETECTED
+  HIGH_RISK_LOGIN
+  TRANSACTION_FROZEN
+  ADMIN_OVERRIDE
+}
+
+// ============================================================================
+// USERS
+// ============================================================================
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique
+  phoneNumber     String?    @unique @map("phone_number")
+  passwordHash    String     @map("password_hash")
+  fullName        String     @map("full_name")
+  role            UserRole   @default(USER)
+  status          UserStatus @default(PENDING_VERIFICATION)
+  isEmailVerified Boolean    @default(false) @map("is_email_verified")
+
+  lastLoginAt DateTime? @map("last_login_at")
+  lastLoginIp String?   @map("last_login_ip")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  bankAccounts BankAccount[]
+  sessions     UserSession[]
+  activityLogs UserActivityLog[]
+
+  transactions         Transaction[]
+  approvedTransactions Transaction[] @relation("ApprovedTransactions")
+
+  processedPayouts     Payout[]       @relation("ProcessedPayouts")
+  updatedExchangeRates ExchangeRate[]
+
+  notifications Notification[]
+
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+
+  loginAttempts  LoginAttempt[]
+  deviceProfiles DeviceRiskProfile[]
+  securityLogs   SecurityLog[]
+  adminLogs      AdminLog[]
+
+  @@index([status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// ============================================================================
+// BANK ACCOUNTS
+// ============================================================================
+
+model BankAccount {
+  id            String  @id @default(cuid())
+  userId        String  @map("user_id")
+  bankName      String  @map("bank_name")
+  accountNumber String  @map("account_number")
+  accountName   String  @map("account_name")
+  isDefault     Boolean @default(false) @map("is_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payouts Payout[]
+
+  @@unique([userId, accountNumber, bankName])
+  @@index([userId])
+  @@map("bank_accounts")
+}
+
+// ============================================================================
+// USER SESSIONS
+// ============================================================================
+
+model UserSession {
+  id               String  @id @default(cuid())
+  userId           String  @map("user_id")
+  refreshTokenHash String  @unique @map("refresh_token_hash")
+  ipAddress        String? @map("ip_address")
+  userAgent        String? @map("user_agent")
+
+  // Captured at session start — useful for "log out from VPN" enforcement
+  isVpn     Boolean @default(false) @map("is_vpn")
+  isProxy   Boolean @default(false) @map("is_proxy")
+  isTor     Boolean @default(false) @map("is_tor")
+  riskScore Int     @default(0) @map("risk_score")
+
+  // isActive intentionally dropped — derive from `revokedAt IS NULL AND expiresAt > NOW()`
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+  lastSeenAt DateTime? @map("last_seen_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("user_sessions")
+}
+
+// ============================================================================
+// EMAIL VERIFICATION TOKENS
+// ============================================================================
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash") // @unique tweak
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("email_verification_tokens")
+}
+
+// ============================================================================
+// PASSWORD RESET TOKENS
+// ============================================================================
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash") // @unique tweak
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ============================================================================
+// USER ACTIVITY LOGS
+// ============================================================================
+
+model UserActivityLog {
+  id        String  @id @default(cuid())
+  userId    String  @map("user_id")
+  action    String
+  metadata  Json?
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@map("user_activity_logs")
+}
+
+// ============================================================================
+// WALLET ADDRESSES
+// ============================================================================
+
+model WalletAddress {
+  id          String        @id @default(cuid())
+  cryptoAsset CryptoAsset   @map("crypto_asset")
+  network     CryptoNetwork
+  address     String
+  label       String?
+  isActive    Boolean       @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  transactions Transaction[]
+
+  @@unique([cryptoAsset, network, address])
+  @@index([cryptoAsset, network, isActive])
+  @@map("wallet_addresses")
+}
+
+// ============================================================================
+// TRANSACTIONS
+// ============================================================================
+
+model Transaction {
+  id            String @id @default(cuid())
+  referenceCode String @unique @map("reference_code") // service generates XCN-XXXXXXXX
+
+  userId String @map("user_id")
+  type   TransactionType
+  status TransactionStatus @default(PENDING)
+
+  cryptoAsset  CryptoAsset   @map("crypto_asset")
+  network      CryptoNetwork
+  cryptoAmount Decimal       @map("crypto_amount") @db.Decimal(36, 18)
+  fiatAmount   Decimal       @map("fiat_amount") @db.Decimal(20, 2)
+  fiatCurrency String        @default("NGN") @map("fiat_currency")
+  rate         Decimal       @db.Decimal(20, 2)
+
+  walletAddressId String? @map("wallet_address_id")
+  txHash          String? @unique @map("tx_hash")
+
+  riskScore Int @default(0) @map("risk_score")
+
+  approvedById   String?   @map("approved_by_id")
+  approvedAt     DateTime? @map("approved_at")
+  rejectedReason String?   @map("rejected_reason")
+
+  expiresAt   DateTime? @map("expires_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user          User               @relation(fields: [userId], references: [id])
+  walletAddress WalletAddress?     @relation(fields: [walletAddressId], references: [id])
+  approvedBy    User?              @relation("ApprovedTransactions", fields: [approvedById], references: [id])
+  proofs        TransactionProof[]
+  payout        Payout?
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([type, status])
+  @@index([referenceCode])
+  @@map("transactions")
+}
+
+// ============================================================================
+// TRANSACTION PROOFS
+// ============================================================================
+
+model TransactionProof {
+  id            String    @id @default(cuid())
+  transactionId String    @map("transaction_id")
+  type          ProofType
+  url           String
+  notes         String?
+  uploadedAt    DateTime  @default(now()) @map("uploaded_at")
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@map("transaction_proofs")
+}
+
+// ============================================================================
+// PAYOUTS
+// ============================================================================
+
+model Payout {
+  id            String       @id @default(cuid())
+  transactionId String       @unique @map("transaction_id")
+  bankAccountId String       @map("bank_account_id")
+  amount        Decimal      @db.Decimal(20, 2)
+  currency      String       @default("NGN")
+  status        PayoutStatus @default(PENDING)
+  reference     String?      @unique
+  failureReason String?      @map("failure_reason")
+
+  processedById String?   @map("processed_by_id")
+  processedAt   DateTime? @map("processed_at") // when PENDING → PROCESSING
+  paidAt        DateTime? @map("paid_at") // when * → PAID
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  processedBy User?       @relation("ProcessedPayouts", fields: [processedById], references: [id])
+
+  @@index([bankAccountId])
+  @@index([status])
+  @@map("payouts")
+}
+
+// ============================================================================
+// EXCHANGE RATES
+// ============================================================================
+
+model ExchangeRate {
+  id               String      @id @default(cuid())
+  asset            CryptoAsset
+  fiatCurrency     String      @default("NGN") @map("fiat_currency")
+  buyRate          Decimal     @map("buy_rate") @db.Decimal(20, 2)
+  sellRate         Decimal     @map("sell_rate") @db.Decimal(20, 2)
+  source           String?
+  isManualOverride Boolean     @default(false) @map("is_manual_override")
+
+  updatedById String? @map("updated_by_id")
+
+  fetchedAt DateTime @default(now()) @map("fetched_at")
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  @@index([asset, fiatCurrency, fetchedAt])
+  @@map("exchange_rates")
+}
+
+// ============================================================================
+// ADMIN LOGS
+// ============================================================================
+
+model AdminLog {
+  id          String  @id @default(cuid())
+  adminId     String  @map("admin_id")
+  action      String
+  entityType  String? @map("entity_type")
+  entityId    String? @map("entity_id")
+  beforeState Json?   @map("before_state")
+  afterState  Json?   @map("after_state")
+  ipAddress   String? @map("ip_address")
+  userAgent   String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  admin User @relation(fields: [adminId], references: [id])
+
+  @@index([adminId, createdAt])
+  @@index([entityType, entityId])
+  @@map("admin_logs")
+}
+
+// ============================================================================
+// IP REPUTATION LOGS
+// ============================================================================
+
+model IpReputationLog {
+  id           String  @id @default(cuid())
+  ipAddress    String  @map("ip_address")
+  isVpn        Boolean @default(false) @map("is_vpn")
+  isProxy      Boolean @default(false) @map("is_proxy")
+  isTor        Boolean @default(false) @map("is_tor")
+  isDatacenter Boolean @default(false) @map("is_datacenter")
+  riskScore    Int     @default(0) @map("risk_score")
+  country      String?
+  region       String?
+  isp          String?
+  asn          String?
+  provider     String?
+  rawPayload   Json?   @map("raw_payload")
+
+  checkedAt DateTime @default(now()) @map("checked_at")
+
+  @@unique([ipAddress, provider])
+  @@index([ipAddress])
+  @@index([riskScore])
+  @@map("ip_reputation_logs")
+}
+
+// ============================================================================
+// DEVICE RISK PROFILES
+// ============================================================================
+
+model DeviceRiskProfile {
+  id          String  @id @default(cuid())
+  userId      String  @map("user_id")
+  fingerprint String
+  deviceInfo  Json?   @map("device_info")
+  riskScore   Int     @default(0) @map("risk_score")
+  trusted     Boolean @default(false)
+
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @updatedAt @map("last_seen_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, fingerprint])
+  @@index([userId])
+  @@map("device_risk_profiles")
+}
+
+// ============================================================================
+// LOGIN ATTEMPTS
+// ============================================================================
+
+model LoginAttempt {
+  id              String  @id @default(cuid())
+  userId          String? @map("user_id")
+  email           String
+  success         Boolean
+  failureReason   String? @map("failure_reason")
+  ipAddress       String? @map("ip_address")
+  userAgent       String? @map("user_agent")
+  isVpnDetected   Boolean @default(false) @map("is_vpn_detected")
+  isProxyDetected Boolean @default(false) @map("is_proxy_detected")
+  isTorDetected   Boolean @default(false) @map("is_tor_detected")
+  riskScore       Int     @default(0) @map("risk_score")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([email, createdAt])
+  @@index([ipAddress, createdAt])
+  @@map("login_attempts")
+}
+
+// ============================================================================
+// SECURITY LOGS
+// ============================================================================
+
+model SecurityLog {
+  id        String            @id @default(cuid())
+  userId    String?           @map("user_id")
+  eventType SecurityEventType @map("event_type")
+  severity  RiskSeverity      @default(LOW)
+  metadata  Json?
+  ipAddress String?           @map("ip_address")
+  userAgent String?           @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([severity])
+  @@map("security_logs")
+}
+
+// ============================================================================
+// NOTIFICATIONS
+// ============================================================================
+
+model Notification {
+  id      String              @id @default(cuid())
+  userId  String              @map("user_id")
+  channel NotificationChannel
+  type    String
+  title   String
+  body    String
+  payload Json?
+  status  NotificationStatus  @default(QUEUED)
+
+  sentAt DateTime? @map("sent_at")
+  readAt DateTime? @map("read_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
