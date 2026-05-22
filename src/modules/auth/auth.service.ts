@@ -7,10 +7,16 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { User, UserStatus } from '@prisma/client';
+import {
+  RiskSeverity,
+  SecurityEventType,
+  User,
+  UserStatus,
+} from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../database/prisma.service';
+import { EmailService } from '../../integrations/email/email.service';
 import { SecurityService } from '../security/security.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -36,6 +42,9 @@ export interface AuthTokens {
 
 type SafeUser = Omit<User, 'passwordHash'>;
 
+const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter, more sensitive action
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -45,6 +54,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly security: SecurityService,
+    private readonly email: EmailService,
   ) {}
 
   async register(
@@ -68,8 +78,21 @@ export class AuthService {
       },
     });
 
+    // Issue + send a verification email so the user can transition out of
+    // PENDING_VERIFICATION. The raw token is also returned in dev mode so
+    // smoke tests don't have to scrape the email log.
+    const { rawToken: verifyToken } = await this.issueVerificationToken(user.id);
+    await this.email.sendVerificationEmail(user.email, verifyToken);
+
     const tokens = await this.issueTokensForUser(user, ctx);
-    return { user: this.sanitize(user), tokens };
+
+    const isDev = this.config.get<string>('NODE_ENV', 'development') !== 'production';
+    return {
+      user: this.sanitize(user),
+      tokens,
+      // Dev affordance — DO NOT keep in production. Real apps never expose tokens.
+      ...(isDev ? { verifyToken } : {}),
+    };
   }
 
   async login(
@@ -184,6 +207,169 @@ export class AuthService {
     });
   }
 
+  // ---------------------------------------------------------------------------
+  // Email verification
+  // ---------------------------------------------------------------------------
+
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    const tokenHash = this.hashToken(token);
+    const record = await this.prisma.emailVerificationToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!record) {
+      throw new BadRequestException('Invalid verification token');
+    }
+    if (record.expiresAt < new Date()) {
+      // Clean up expired tokens opportunistically.
+      await this.prisma.emailVerificationToken
+        .delete({ where: { id: record.id } })
+        .catch(() => undefined);
+      throw new BadRequestException('Verification token expired');
+    }
+
+    // Atomic: mark user verified + transition PENDING_VERIFICATION -> ACTIVE
+    // + drop all this user's verification tokens (one-use semantics).
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: record.userId },
+        data: {
+          isEmailVerified: true,
+          // Only advance status if they're still in the onboarding state —
+          // never overwrite SUSPENDED or DEACTIVATED with ACTIVE.
+          status: UserStatus.ACTIVE,
+        },
+      }),
+      this.prisma.emailVerificationToken.deleteMany({
+        where: { userId: record.userId },
+      }),
+    ]);
+
+    return { message: 'Email verified' };
+  }
+
+  async resendVerification(emailRaw: string): Promise<{ message: string }> {
+    const email = emailRaw.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    // Always return the same response regardless of whether the email exists
+    // or is already verified — don't leak account existence.
+    const genericResponse = {
+      message: 'If the account exists and is unverified, a new email has been sent',
+    };
+
+    if (!user || user.isEmailVerified || user.deletedAt) {
+      return genericResponse;
+    }
+
+    // Invalidate any prior outstanding tokens for this user — one valid at a time.
+    await this.prisma.emailVerificationToken.deleteMany({
+      where: { userId: user.id },
+    });
+
+    const { rawToken } = await this.issueVerificationToken(user.id);
+    await this.email.sendVerificationEmail(user.email, rawToken);
+
+    return genericResponse;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Password reset
+  // ---------------------------------------------------------------------------
+
+  async forgotPassword(
+    emailRaw: string,
+  ): Promise<{ message: string; resetToken?: string }> {
+    const email = emailRaw.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+
+    // Generic response — don't leak account existence.
+    const generic = {
+      message: 'If an account exists for that email, a reset link has been sent',
+    };
+
+    if (!user || user.deletedAt) return generic;
+
+    // Rotate: invalidate any prior tokens (used or pending) for this user.
+    await this.prisma.passwordResetToken.deleteMany({
+      where: { userId: user.id },
+    });
+
+    const rawToken = randomBytes(32).toString('base64url');
+    const tokenHash = this.hashToken(rawToken);
+
+    await this.prisma.passwordResetToken.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt: new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS),
+      },
+    });
+
+    await this.email.sendPasswordResetEmail(user.email, rawToken);
+
+    // Dev affordance — DO NOT keep in production. Lets tests skip log scraping.
+    const isDev =
+      this.config.get<string>('NODE_ENV', 'development') !== 'production';
+    return isDev ? { ...generic, resetToken: rawToken } : generic;
+  }
+
+  async resetPassword(
+    token: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    const tokenHash = this.hashToken(token);
+    const record = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash },
+    });
+
+    if (!record) throw new BadRequestException('Invalid reset token');
+    if (record.usedAt) {
+      throw new BadRequestException('Reset token has already been used');
+    }
+    if (record.expiresAt < new Date()) {
+      // Clean up expired tokens opportunistically.
+      await this.prisma.passwordResetToken
+        .delete({ where: { id: record.id } })
+        .catch(() => undefined);
+      throw new BadRequestException('Reset token expired');
+    }
+
+    const rounds = this.config.get<number>('BCRYPT_ROUNDS', 12);
+    const newPasswordHash = await bcrypt.hash(newPassword, rounds);
+
+    // Atomic bundle of "the password reset transaction":
+    //   1. Swap password hash on the user
+    //   2. Mark token used (don't delete — preserves the audit row)
+    //   3. Revoke every active session so any stolen refresh token dies too
+    //   4. Write a security_log for compliance / forensics
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: record.userId },
+        data: { passwordHash: newPasswordHash },
+      }),
+      this.prisma.passwordResetToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.userSession.updateMany({
+        where: { userId: record.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+      this.prisma.securityLog.create({
+        data: {
+          userId: record.userId,
+          eventType: SecurityEventType.PASSWORD_RESET,
+          severity: RiskSeverity.MEDIUM,
+        },
+      }),
+    ]);
+
+    return {
+      message: 'Password reset successful. Please log in with your new password.',
+    };
+  }
+
   /**
    * Used by JwtStrategy to confirm the session referenced by an access
    * token is still alive. Returns the session row or null.
@@ -275,6 +461,27 @@ export class AuthService {
       // Don't let audit logging fail the auth flow — just log it.
       this.logger.warn(`Failed to record login attempt: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Generate a verification token: opaque random string, stored as a sha256
+   * hash so the raw value never sits in the DB. Same pattern as refresh tokens.
+   */
+  private async issueVerificationToken(
+    userId: string,
+  ): Promise<{ rawToken: string }> {
+    const rawToken = randomBytes(32).toString('base64url');
+    const tokenHash = this.hashToken(rawToken);
+
+    await this.prisma.emailVerificationToken.create({
+      data: {
+        userId,
+        tokenHash,
+        expiresAt: new Date(Date.now() + VERIFICATION_TOKEN_TTL_MS),
+      },
+    });
+
+    return { rawToken };
   }
 
   private hashToken(raw: string): string {

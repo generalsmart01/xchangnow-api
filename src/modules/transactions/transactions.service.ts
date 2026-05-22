@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -19,7 +20,9 @@ import { WalletsService } from '../wallets/wallets.service';
 import { ApproveTransactionDto } from './dto/approve-transaction.dto';
 import { CreateBuyDto } from './dto/create-buy.dto';
 import { CreateSellDto } from './dto/create-sell.dto';
+import { CreateSwapDto } from './dto/create-swap.dto';
 import { ListTransactionsQueryDto } from './dto/list-transactions-query.dto';
+import { MarkCompletedDto } from './dto/mark-completed.dto';
 import { RejectTransactionDto } from './dto/reject-transaction.dto';
 import { UploadProofDto } from './dto/upload-proof.dto';
 
@@ -82,7 +85,51 @@ export class TransactionsService {
         network: dto.network,
         cryptoAmount,
         fiatAmount,
+        fiatCurrency: 'NGN',
         rate,
+        walletAddressId: wallet.id,
+        expiresAt: new Date(Date.now() + TX_EXPIRY_MS),
+      },
+      include: { walletAddress: true },
+    });
+  }
+
+  async createSwap(userId: string, dto: CreateSwapDto) {
+    if (dto.fromAsset === dto.toAsset) {
+      throw new BadRequestException('fromAsset and toAsset must differ');
+    }
+
+    // Pair rate is derived from existing NGN-pegged rates:
+    //   pairRate = fromAssetSellRate (we buy from user) / toAssetBuyRate (we sell to user)
+    // The spread between buy/sell rates IS our swap fee, so users get slightly
+    // less than the "fair" cross-rate. Same model real exchanges use.
+    const fromSellRate = await this.currentRate(dto.fromAsset, 'sell');
+    const toBuyRate = await this.currentRate(dto.toAsset, 'buy');
+    const pairRate = fromSellRate.div(toBuyRate);
+
+    const fromAmount = new Prisma.Decimal(dto.fromAmount);
+    const toAmount = fromAmount.mul(pairRate);
+
+    const wallet = await this.wallets.pickActiveWallet(
+      dto.fromAsset,
+      dto.fromNetwork,
+    );
+
+    return this.prisma.transaction.create({
+      data: {
+        referenceCode: this.generateReferenceCode(),
+        userId,
+        type: TransactionType.SWAP,
+        status: TransactionStatus.PENDING,
+        cryptoAsset: dto.fromAsset,
+        network: dto.fromNetwork,
+        cryptoAmount: fromAmount,
+        toAsset: dto.toAsset,
+        toNetwork: dto.toNetwork,
+        toAmount,
+        toAddress: dto.toAddress,
+        rate: pairRate,
+        // No fiat side for SWAP — fiatAmount/fiatCurrency stay null.
         walletAddressId: wallet.id,
         expiresAt: new Date(Date.now() + TX_EXPIRY_MS),
       },
@@ -105,6 +152,7 @@ export class TransactionsService {
         network: dto.network,
         cryptoAmount,
         fiatAmount,
+        fiatCurrency: 'NGN',
         rate,
         expiresAt: new Date(Date.now() + TX_EXPIRY_MS),
       },
@@ -157,49 +205,66 @@ export class TransactionsService {
       );
     }
 
-    // Enforce proof type matches transaction type.
-    if (
-      tx.type === TransactionType.SELL &&
-      dto.type !== ProofType.CRYPTO_TX_HASH
-    ) {
+    // Each transaction type has an expected proof shape:
+    //   SELL → user sent crypto to us → CRYPTO_TX_HASH
+    //   SWAP → user sent FROM crypto to us → CRYPTO_TX_HASH
+    //   BUY  → user sent fiat to us → BANK_TRANSFER_RECEIPT
+    const requiredProof: Record<TransactionType, ProofType> = {
+      [TransactionType.SELL]: ProofType.CRYPTO_TX_HASH,
+      [TransactionType.SWAP]: ProofType.CRYPTO_TX_HASH,
+      [TransactionType.BUY]: ProofType.BANK_TRANSFER_RECEIPT,
+    };
+    if (dto.type !== requiredProof[tx.type]) {
       throw new BadRequestException(
-        'SELL transactions require CRYPTO_TX_HASH proof',
-      );
-    }
-    if (
-      tx.type === TransactionType.BUY &&
-      dto.type !== ProofType.BANK_TRANSFER_RECEIPT
-    ) {
-      throw new BadRequestException(
-        'BUY transactions require BANK_TRANSFER_RECEIPT proof',
+        `${tx.type} transactions require ${requiredProof[tx.type]} proof`,
       );
     }
 
     // Atomic: write the proof + advance state machine in one transaction.
-    return this.prisma.$transaction(async (db) => {
-      const proof = await db.transactionProof.create({
-        data: {
-          transactionId: tx.id,
-          type: dto.type,
-          url: dto.value, // schema field is named `url`; stores hash or URL
-          notes: dto.notes,
-        },
-      });
+    try {
+      return await this.prisma.$transaction(async (db) => {
+        const proof = await db.transactionProof.create({
+          data: {
+            transactionId: tx.id,
+            type: dto.type,
+            url: dto.value, // schema field is named `url`; stores hash or URL
+            notes: dto.notes,
+          },
+        });
 
-      const update: Prisma.TransactionUpdateInput = {
-        status: TransactionStatus.UNDER_REVIEW,
-      };
-      if (tx.type === TransactionType.SELL) {
-        update.txHash = dto.value;
+        const update: Prisma.TransactionUpdateInput = {
+          status: TransactionStatus.UNDER_REVIEW,
+        };
+        // SELL + SWAP both submit an on-chain tx hash — persist it onto the
+        // transaction row so admins can look it up without joining proofs.
+        if (
+          tx.type === TransactionType.SELL ||
+          tx.type === TransactionType.SWAP
+        ) {
+          update.txHash = dto.value;
+        }
+
+        await db.transaction.update({
+          where: { id: tx.id },
+          data: update,
+        });
+
+        return proof;
+      });
+    } catch (err) {
+      // tx_hash is @unique system-wide. A collision = the user is submitting a
+      // hash that's already been claimed (their own past tx or someone else's).
+      // Surface a clear 409 instead of letting the raw Prisma error become a 500.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          'This transaction hash has already been submitted',
+        );
       }
-
-      await db.transaction.update({
-        where: { id: tx.id },
-        data: update,
-      });
-
-      return proof;
-    });
+      throw err;
+    }
   }
 
   // =============================== admin ===============================
@@ -245,6 +310,14 @@ export class TransactionsService {
       // We snapshot the *current* default bank, not the one at creation time —
       // a future improvement is to lock the bank account id at SELL creation.
       if (tx.type === TransactionType.SELL) {
+        // SELL transactions always carry fiat fields (set in createSell), but
+        // the schema marks them nullable to accommodate SWAP. Guard for safety
+        // and to let TS narrow the types below.
+        if (tx.fiatAmount === null || tx.fiatCurrency === null) {
+          throw new BadRequestException(
+            'SELL transaction is missing fiat fields; data integrity error',
+          );
+        }
         const bank = await db.bankAccount.findFirst({
           where: { userId: tx.userId, isDefault: true },
         });
@@ -271,6 +344,81 @@ export class TransactionsService {
           userId: tx.userId,
           action: 'TRANSACTION_APPROVED',
           metadata: { by: adminId, transactionId: txId } as never,
+        },
+      });
+
+      return updated;
+    });
+  }
+
+  /**
+   * Manually transition APPROVED -> COMPLETED for BUY/SWAP transactions.
+   * SELL is excluded: it completes automatically when its Payout flips to PAID.
+   */
+  async markCompleted(
+    adminId: string,
+    txId: string,
+    dto: MarkCompletedDto,
+  ): Promise<Transaction> {
+    const tx = await this.prisma.transaction.findUnique({ where: { id: txId } });
+    if (!tx) throw new NotFoundException('Transaction not found');
+
+    if (tx.status !== TransactionStatus.APPROVED) {
+      throw new BadRequestException(
+        `Cannot mark COMPLETED from status ${tx.status}; expected APPROVED`,
+      );
+    }
+
+    if (tx.type === TransactionType.SELL) {
+      // The PayoutsService cascades SELL -> COMPLETED on payout PAID.
+      // Letting admins double-complete here would skip the payout flow.
+      throw new BadRequestException(
+        'SELL transactions complete via payout PAID, not this endpoint',
+      );
+    }
+
+    if (!dto.outboundTxHash) {
+      throw new BadRequestException(
+        `${tx.type} requires outboundTxHash to record the crypto sent to the user`,
+      );
+    }
+    // Capture the narrowed (non-undefined) value — TS can't carry the
+    // narrowing into the async closure below.
+    const outboundTxHash = dto.outboundTxHash;
+
+    return this.prisma.$transaction(async (db) => {
+      const updated = await db.transaction.update({
+        where: { id: txId },
+        data: {
+          status: TransactionStatus.COMPLETED,
+          completedAt: new Date(),
+        },
+      });
+
+      // Store the outbound hash as a TransactionProof.
+      // ProofType.OTHER because user-side proof types are CRYPTO_TX_HASH (SELL/SWAP
+      // incoming) and BANK_TRANSFER_RECEIPT (BUY incoming); an admin-recorded
+      // OUTGOING hash semantically doesn't match either. Notes carry the context.
+      await db.transactionProof.create({
+        data: {
+          transactionId: txId,
+          type: ProofType.OTHER,
+          url: outboundTxHash,
+          notes: dto.notes
+            ? `Outbound (admin-sent) tx hash. ${dto.notes}`
+            : 'Outbound (admin-sent) tx hash',
+        },
+      });
+
+      await db.userActivityLog.create({
+        data: {
+          userId: tx.userId,
+          action: 'TRANSACTION_COMPLETED',
+          metadata: {
+            by: adminId,
+            transactionId: txId,
+            outboundTxHash,
+          } as never,
         },
       });
 
@@ -353,10 +501,13 @@ export class TransactionsService {
     asset: CryptoAsset,
     side: 'buy' | 'sell',
   ): Promise<Prisma.Decimal> {
+    // Pick the most recent rate for this asset (NGN side). Within the last
+    // hour to bound staleness — older rates fall back to the hardcoded table.
     const recent = await this.prisma.exchangeRate.findFirst({
       where: {
         asset,
-        fetchedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) }, // within last hour
+        fiatCurrency: 'NGN',
+        fetchedAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
       },
       orderBy: { fetchedAt: 'desc' },
     });

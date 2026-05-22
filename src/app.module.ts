@@ -6,6 +6,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { PayoutsModule } from './modules/payouts/payouts.module';
+import { RatesModule } from './modules/rates/rates.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
 import { UsersModule } from './modules/users/users.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
@@ -23,6 +24,7 @@ import { WalletsModule } from './modules/wallets/wallets.module';
     AuthModule,
     UsersModule,
     WalletsModule,
+    RatesModule,
     TransactionsModule,
     PayoutsModule,
     AdminModule,

@@ -31,6 +31,7 @@ enum UserStatus {
 enum TransactionType {
   BUY
   SELL
+  SWAP
 }
 
 enum TransactionStatus {
@@ -292,14 +293,26 @@ model Transaction {
   type   TransactionType
   status TransactionStatus @default(PENDING)
 
+  // For BUY/SELL: the single asset traded. For SWAP: the FROM asset.
   cryptoAsset  CryptoAsset   @map("crypto_asset")
   network      CryptoNetwork
   cryptoAmount Decimal       @map("crypto_amount") @db.Decimal(36, 18)
-  fiatAmount   Decimal       @map("fiat_amount") @db.Decimal(20, 2)
-  fiatCurrency String        @default("NGN") @map("fiat_currency")
-  rate         Decimal       @db.Decimal(20, 2)
 
-  walletAddressId String? @map("wallet_address_id")
+  // SWAP-only fields. Null for BUY/SELL.
+  toAsset   CryptoAsset?   @map("to_asset")
+  toNetwork CryptoNetwork? @map("to_network")
+  toAmount  Decimal?       @map("to_amount") @db.Decimal(36, 18)
+  toAddress String?        @map("to_address") // user's destination wallet for SWAP
+
+  // Fiat side: only populated for BUY/SELL.
+  fiatAmount   Decimal? @map("fiat_amount") @db.Decimal(20, 2)
+  fiatCurrency String?  @map("fiat_currency")
+
+  // For BUY/SELL: fiat per crypto unit. For SWAP: quoteAsset per fromAsset unit.
+  // Bumped to (36,18) because crypto-pair rates can be tiny (e.g., USDT/BTC).
+  rate Decimal @db.Decimal(36, 18)
+
+  walletAddressId String? @map("wallet_address_id") // company wallet user sends TO (SELL/SWAP from-side)
   txHash          String? @unique @map("tx_hash")
 
   riskScore Int @default(0) @map("risk_score")
