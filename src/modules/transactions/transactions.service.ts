@@ -169,15 +169,7 @@ export class TransactionsService {
       `BUY created ref=${tx.referenceCode} userId=${userId} ${dto.fiatAmount} NGN → ${dto.cryptoAsset}`,
     );
 
-    // Return company bank details + the transaction's reference code so the
-    // user can put it in the bank transfer narration for admin matching.
-    return {
-      ...tx,
-      paymentInstructions: {
-        ...COMPANY_BANK,
-        reference: tx.referenceCode,
-      },
-    };
+    return this.attachPaymentInstructions(tx);
   }
 
   // =============================== reads ===============================
@@ -195,7 +187,10 @@ export class TransactionsService {
       // Same 404 for missing and not-yours, to avoid leaking existence.
       throw new NotFoundException('Transaction not found');
     }
-    return tx;
+    // BUY transactions need paymentInstructions on every read — a user
+    // returning to the detail page after creation still has to see where
+    // to send the bank transfer. Mirror what createBuy returns.
+    return this.attachPaymentInstructions(tx);
   }
 
   // ============================ proof upload ============================
@@ -288,13 +283,15 @@ export class TransactionsService {
     return this.runList(query); // no userId enforcement
   }
 
-  async findByIdAsAdmin(txId: string): Promise<Transaction> {
+  async findByIdAsAdmin(txId: string) {
     const tx = await this.prisma.transaction.findUnique({
       where: { id: txId },
       include: { proofs: true, walletAddress: true, user: true },
     });
     if (!tx) throw new NotFoundException('Transaction not found');
-    return tx;
+    // Admins reviewing a BUY want to see the bank info that was shown to the
+    // user (so they can match it against the uploaded receipt).
+    return this.attachPaymentInstructions(tx);
   }
 
   async approve(
@@ -499,6 +496,32 @@ export class TransactionsService {
   }
 
   // ============================ internals ============================
+
+  /**
+   * BUY transactions need the company bank details + transaction reference
+   * available to the frontend on every read so the user can see "where to pay"
+   * after navigating back to the detail page (or copy the reference again
+   * before initiating their transfer). This is reference data — recomputed on
+   * the fly from COMPANY_BANK + tx.referenceCode rather than stored on the row.
+   *
+   * SELL/SWAP are returned unchanged — the company wallet address lives on
+   * the `walletAddress` relation, not `paymentInstructions`.
+   *
+   * Generic so the caller's narrow type survives the wrap (Transaction stays
+   * Transaction, Transaction & { user: User } stays that).
+   */
+  private attachPaymentInstructions<
+    T extends { type: TransactionType; referenceCode: string },
+  >(tx: T): T | (T & { paymentInstructions: typeof COMPANY_BANK & { reference: string } }) {
+    if (tx.type !== TransactionType.BUY) return tx;
+    return {
+      ...tx,
+      paymentInstructions: {
+        ...COMPANY_BANK,
+        reference: tx.referenceCode,
+      },
+    };
+  }
 
   private async runList(query: ListTransactionsQueryDto) {
     const page = query.page ?? 1;
