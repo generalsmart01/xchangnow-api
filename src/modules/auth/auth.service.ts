@@ -4,25 +4,25 @@ import {
   Injectable,
   Logger,
   UnauthorizedException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { JwtService } from '@nestjs/jwt';
+} from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { JwtService } from "@nestjs/jwt";
 import {
   Prisma,
   RiskSeverity,
   SecurityEventType,
   User,
   UserStatus,
-} from '@prisma/client';
-import * as bcrypt from 'bcrypt';
-import { createHash, randomBytes } from 'crypto';
-import { PrismaService } from '../../database/prisma.service';
-import { EmailService } from '../../integrations/email/email.service';
-import { SecurityService } from '../security/security.service';
-import { LoginDto } from './dto/login.dto';
-import { RegisterDto } from './dto/register.dto';
-import { Role } from './enums/role.enum';
-import { JwtPayload } from './interfaces/jwt-payload.interface';
+} from "@prisma/client";
+import * as bcrypt from "bcrypt";
+import { createHash, randomBytes } from "crypto";
+import { PrismaService } from "../../database/prisma.service";
+import { EmailService } from "../../integrations/email/email.service";
+import { SecurityService } from "../security/security.service";
+import { LoginDto } from "./dto/login.dto";
+import { RegisterDto } from "./dto/register.dto";
+import { Role } from "./enums/role.enum";
+import { JwtPayload } from "./interfaces/jwt-payload.interface";
 
 export interface SessionContext {
   ipAddress?: string;
@@ -41,7 +41,7 @@ export interface AuthTokens {
   refreshExpiresIn: string;
 }
 
-type SafeUser = Omit<User, 'passwordHash'>;
+type SafeUser = Omit<User, "passwordHash">;
 
 const VERIFICATION_TOKEN_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter, more sensitive action
@@ -60,14 +60,16 @@ export class AuthService {
 
   async register(
     dto: RegisterDto,
-    ctx: SessionContext,
-  ): Promise<{ user: SafeUser; tokens: AuthTokens }> {
+  ): Promise<{ user: SafeUser; verifyToken?: string }> {
+    // No session ctx parameter here anymore. Register doesn't issue tokens —
+    // strict flow requires the user to verify their email first, then call
+    // /auth/login (which is where session/ip risk signals get captured).
     const email = dto.email.toLowerCase().trim();
 
     const existing = await this.prisma.user.findUnique({ where: { email } });
-    if (existing) throw new ConflictException('Email already registered');
+    if (existing) throw new ConflictException("Email already existed");
 
-    const rounds = this.config.get<number>('BCRYPT_ROUNDS', 12);
+    const rounds = this.config.get<number>("BCRYPT_ROUNDS", 12);
     const passwordHash = await bcrypt.hash(dto.password, rounds);
 
     // The email pre-check above gives fast, clean feedback for the common case,
@@ -90,16 +92,16 @@ export class AuthService {
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
-        err.code === 'P2002'
+        err.code === "P2002"
       ) {
         const target = (err.meta?.target as string[] | undefined)?.[0];
-        if (target === 'phone_number') {
-          throw new ConflictException('Phone number already registered');
+        if (target === "phone_number") {
+          throw new ConflictException("Phone number already registered");
         }
-        if (target === 'email') {
-          throw new ConflictException('Email already registered');
+        if (target === "email") {
+          throw new ConflictException("Email already registered");
         }
-        throw new ConflictException('Account already exists');
+        throw new ConflictException("Account already exists");
       }
       throw err;
     }
@@ -109,15 +111,15 @@ export class AuthService {
     // Issue + send a verification email so the user can transition out of
     // PENDING_VERIFICATION. The raw token is also returned in dev mode so
     // smoke tests don't have to scrape the email log.
-    const { rawToken: verifyToken } = await this.issueVerificationToken(user.id);
+    const { rawToken: verifyToken } = await this.issueVerificationToken(
+      user.id,
+    );
     await this.email.sendVerificationEmail(user.email, verifyToken);
 
-    const tokens = await this.issueTokensForUser(user, ctx);
-
-    const isDev = this.config.get<string>('NODE_ENV', 'development') !== 'production';
+    const isDev =
+      this.config.get<string>("NODE_ENV", "development") !== "production";
     return {
       user: this.sanitize(user),
-      tokens,
       // Dev affordance — DO NOT keep in production. Real apps never expose tokens.
       ...(isDev ? { verifyToken } : {}),
     };
@@ -140,28 +142,31 @@ export class AuthService {
     });
     if (!risk.allowed) {
       throw new UnauthorizedException(
-        'Too many failed attempts. Try again later.',
+        "Too many failed attempts. Try again later.",
       );
     }
 
     const user = await this.prisma.user.findUnique({ where: { email } });
 
     if (!user || user.deletedAt) {
-      await this.recordLoginAttempt(null, email, false, 'USER_NOT_FOUND', ctx);
+      await this.recordLoginAttempt(null, email, false, "USER_NOT_FOUND", ctx);
       // Same error message for both branches — don't leak which emails exist.
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException("Email or password incorrect");
     }
 
     const passwordOk = await bcrypt.compare(dto.password, user.passwordHash);
     if (!passwordOk) {
-      await this.recordLoginAttempt(user.id, email, false, 'BAD_PASSWORD', ctx);
-      throw new UnauthorizedException('Invalid credentials');
+      await this.recordLoginAttempt(user.id, email, false, "BAD_PASSWORD", ctx);
+      throw new UnauthorizedException("Invalid credentials");
     }
 
-    if (
-      user.status !== UserStatus.ACTIVE &&
-      user.status !== UserStatus.PENDING_VERIFICATION
-    ) {
+    // Strict email-verification gate: only ACTIVE users may log in.
+    // PENDING_VERIFICATION (just-registered, not yet verified), SUSPENDED, and
+    // DEACTIVATED accounts all fall through to the same audit + 401 path. The
+    // 401 message DOES distinguish the unverified case from credentials-bad,
+    // because the right next action is different — go check your inbox / resend
+    // verification, not "try a different password".
+    if (user.status !== UserStatus.ACTIVE) {
       await this.recordLoginAttempt(
         user.id,
         email,
@@ -169,6 +174,11 @@ export class AuthService {
         `STATUS_${user.status}`,
         ctx,
       );
+      if (user.status === UserStatus.PENDING_VERIFICATION) {
+        throw new UnauthorizedException(
+          'Please verify your email before logging in. Check your inbox or request a new verification email.',
+        );
+      }
       throw new UnauthorizedException('Account not active');
     }
 
@@ -195,7 +205,9 @@ export class AuthService {
     };
 
     const tokens = await this.issueTokensForUser(updatedUser, enrichedCtx);
-    this.logger.log(`Login success id=${updatedUser.id} email=${updatedUser.email} ip=${ctx.ipAddress ?? '-'}`);
+    this.logger.log(
+      `Login success id=${updatedUser.id} email=${updatedUser.email} ip=${ctx.ipAddress ?? "-"}`,
+    );
     return { user: this.sanitize(updatedUser), tokens };
   }
 
@@ -208,10 +220,10 @@ export class AuthService {
       where: { refreshTokenHash },
     });
 
-    if (!session) throw new UnauthorizedException('Invalid refresh token');
-    if (session.revokedAt) throw new UnauthorizedException('Session revoked');
+    if (!session) throw new UnauthorizedException("Invalid refresh token");
+    if (session.revokedAt) throw new UnauthorizedException("Session revoked");
     if (session.expiresAt < new Date()) {
-      throw new UnauthorizedException('Session expired');
+      throw new UnauthorizedException("Session expired");
     }
 
     // Rotate: revoke the old session, issue a fresh pair.
@@ -248,14 +260,14 @@ export class AuthService {
     });
 
     if (!record) {
-      throw new BadRequestException('Invalid verification token');
+      throw new BadRequestException("Invalid verification token");
     }
     if (record.expiresAt < new Date()) {
       // Clean up expired tokens opportunistically.
       await this.prisma.emailVerificationToken
         .delete({ where: { id: record.id } })
         .catch(() => undefined);
-      throw new BadRequestException('Verification token expired');
+      throw new BadRequestException("Verification token expired");
     }
 
     // Atomic: mark user verified + transition PENDING_VERIFICATION -> ACTIVE
@@ -276,7 +288,7 @@ export class AuthService {
     ]);
 
     this.logger.log(`Email verified userId=${record.userId}`);
-    return { message: 'Email verified' };
+    return { message: "Email verified" };
   }
 
   async resendVerification(emailRaw: string): Promise<{ message: string }> {
@@ -286,7 +298,8 @@ export class AuthService {
     // Always return the same response regardless of whether the email exists
     // or is already verified — don't leak account existence.
     const genericResponse = {
-      message: 'If the account exists and is unverified, a new email has been sent',
+      message:
+        "If the account exists and is unverified, a new email has been sent",
     };
 
     if (!user || user.isEmailVerified || user.deletedAt) {
@@ -316,7 +329,8 @@ export class AuthService {
 
     // Generic response — don't leak account existence.
     const generic = {
-      message: 'If an account exists for that email, a reset link has been sent',
+      message:
+        "If an account exists for that email, a reset link has been sent",
     };
 
     if (!user || user.deletedAt) return generic;
@@ -326,7 +340,7 @@ export class AuthService {
       where: { userId: user.id },
     });
 
-    const rawToken = randomBytes(32).toString('base64url');
+    const rawToken = randomBytes(32).toString("base64url");
     const tokenHash = this.hashToken(rawToken);
 
     await this.prisma.passwordResetToken.create({
@@ -342,7 +356,7 @@ export class AuthService {
 
     // Dev affordance — DO NOT keep in production. Lets tests skip log scraping.
     const isDev =
-      this.config.get<string>('NODE_ENV', 'development') !== 'production';
+      this.config.get<string>("NODE_ENV", "development") !== "production";
     return isDev ? { ...generic, resetToken: rawToken } : generic;
   }
 
@@ -355,19 +369,19 @@ export class AuthService {
       where: { tokenHash },
     });
 
-    if (!record) throw new BadRequestException('Invalid reset token');
+    if (!record) throw new BadRequestException("Invalid reset token");
     if (record.usedAt) {
-      throw new BadRequestException('Reset token has already been used');
+      throw new BadRequestException("Reset token has already been used");
     }
     if (record.expiresAt < new Date()) {
       // Clean up expired tokens opportunistically.
       await this.prisma.passwordResetToken
         .delete({ where: { id: record.id } })
         .catch(() => undefined);
-      throw new BadRequestException('Reset token expired');
+      throw new BadRequestException("Reset token expired");
     }
 
-    const rounds = this.config.get<number>('BCRYPT_ROUNDS', 12);
+    const rounds = this.config.get<number>("BCRYPT_ROUNDS", 12);
     const newPasswordHash = await bcrypt.hash(newPassword, rounds);
 
     // Atomic bundle of "the password reset transaction":
@@ -401,7 +415,8 @@ export class AuthService {
       `Password reset completed userId=${record.userId} — all sessions revoked`,
     );
     return {
-      message: 'Password reset successful. Please log in with your new password.',
+      message:
+        "Password reset successful. Please log in with your new password.",
     };
   }
 
@@ -425,21 +440,21 @@ export class AuthService {
   // ---------------------------------------------------------------------------
 
   private async issueTokensForUser(
-    user: Pick<User, 'id' | 'email' | 'role'>,
+    user: Pick<User, "id" | "email" | "role">,
     ctx: SessionContext,
   ): Promise<AuthTokens> {
     const refreshExpiresIn = this.config.get<string>(
-      'JWT_REFRESH_EXPIRES_IN',
-      '7d',
+      "JWT_REFRESH_EXPIRES_IN",
+      "7d",
     );
     const accessExpiresIn = this.config.get<string>(
-      'JWT_ACCESS_EXPIRES_IN',
-      '15m',
+      "JWT_ACCESS_EXPIRES_IN",
+      "15m",
     );
     const refreshExpiresAt = this.computeExpiry(refreshExpiresIn);
 
     // Refresh token: opaque random string. Stored hashed; raw value goes to client.
-    const refreshToken = randomBytes(48).toString('base64url');
+    const refreshToken = randomBytes(48).toString("base64url");
     const refreshTokenHash = this.hashToken(refreshToken);
 
     const session = await this.prisma.userSession.create({
@@ -494,7 +509,9 @@ export class AuthService {
       });
     } catch (err) {
       // Don't let audit logging fail the auth flow — just log it.
-      this.logger.warn(`Failed to record login attempt: ${(err as Error).message}`);
+      this.logger.warn(
+        `Failed to record login attempt: ${(err as Error).message}`,
+      );
     }
   }
 
@@ -505,7 +522,7 @@ export class AuthService {
   private async issueVerificationToken(
     userId: string,
   ): Promise<{ rawToken: string }> {
-    const rawToken = randomBytes(32).toString('base64url');
+    const rawToken = randomBytes(32).toString("base64url");
     const tokenHash = this.hashToken(rawToken);
 
     await this.prisma.emailVerificationToken.create({
@@ -522,12 +539,13 @@ export class AuthService {
   private hashToken(raw: string): string {
     // sha256 is right for high-entropy random tokens — fast and collision-resistant.
     // bcrypt is for *low-entropy* secrets (passwords) where slowness fights brute force.
-    return createHash('sha256').update(raw).digest('hex');
+    return createHash("sha256").update(raw).digest("hex");
   }
 
   private computeExpiry(duration: string): Date {
     const match = /^(\d+)([smhd])$/.exec(duration);
-    if (!match) throw new BadRequestException(`Invalid duration format: ${duration}`);
+    if (!match)
+      throw new BadRequestException(`Invalid duration format: ${duration}`);
     const value = parseInt(match[1], 10);
     const unitMs: Record<string, number> = {
       s: 1_000,

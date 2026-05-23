@@ -62,20 +62,21 @@ export class AuthController {
   @ApiOperation({
     summary: 'Register a new user',
     description:
-      'Creates a new user with `status=PENDING_VERIFICATION` and `isEmailVerified=false`, ' +
-      'issues access + refresh tokens immediately (so the client can navigate the app), ' +
-      'and sends a verification email. ' +
-      'In dev mode (`NODE_ENV !== "production"`) the response also includes the raw ' +
-      '`verifyToken` so tests can complete the flow without scraping email logs. ' +
-      'Note: financial endpoints (sell/buy/swap/proof) are blocked until the email is verified.',
+      'Creates a new user with `status=PENDING_VERIFICATION` and ' +
+      '`isEmailVerified=false`, then sends a verification email. ' +
+      '**No tokens are returned** — the user must verify their email first, ' +
+      'then call POST /auth/login. Attempting to log in before verification ' +
+      'returns 401. ' +
+      'In dev mode (`NODE_ENV !== "production"`) the response also includes ' +
+      'the raw `verifyToken` so tests can complete the flow without scraping ' +
+      'email logs.',
   })
   @ApiResponse({
     status: 201,
-    description: 'User created.',
+    description: 'User created. Frontend should now show "check your inbox" UX.',
     schema: {
       example: {
         user: AUTH_USER_EXAMPLE,
-        tokens: AUTH_TOKENS_EXAMPLE,
         verifyToken: 'a1b2c3d4...DEV-ONLY...xyz', // only present when NODE_ENV != production
       },
     },
@@ -86,10 +87,10 @@ export class AuthController {
   })
   @ApiResponse({
     status: 409,
-    description: 'Email already registered.',
+    description: 'Email or phone number already registered.',
   })
-  register(@Body() dto: RegisterDto, @Req() req: Request) {
-    return this.auth.register(dto, this.context(req));
+  register(@Body() dto: RegisterDto) {
+    return this.auth.register(dto);
   }
 
   @Post('login')
