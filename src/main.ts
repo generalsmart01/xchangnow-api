@@ -39,8 +39,22 @@ async function bootstrap() {
     new ResponseInterceptor(reflector),
   );
 
+  // CORS: lock to the FRONTEND_URL allowlist in prod (so only trusted frontends
+  // can call the API from a browser); wide-open in dev so curl / Swagger UI /
+  // Postman / arbitrary localhost ports all work without ceremony.
+  //
+  // FRONTEND_URL is comma-separated; we split into an array so multiple origins
+  // (user app + management dashboard, www + apex, preview deploys) all work.
+  // `credentials: true` lets the frontend send cookies cross-origin — required
+  // for the cookie-based JWT pattern we're using on the Next.js side.
+  const isProd = config.get<string>('NODE_ENV') === 'production';
+  const allowedOrigins = config
+    .get<string>('FRONTEND_URL', 'http://localhost:3001')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
   app.enableCors({
-    origin: true,
+    origin: isProd ? allowedOrigins : true,
     credentials: true,
   });
 

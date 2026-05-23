@@ -67,8 +67,15 @@ export class EmailService implements OnModuleInit {
   // ---------------------------------------------------------------------------
 
   async sendVerificationEmail(to: string, rawToken: string): Promise<void> {
-    const base = this.config.get<string>('APP_URL', 'http://localhost:3450');
-    const verifyUrl = `${base}/api/auth/verify-email?token=${rawToken}`;
+    // Link points at the FRONTEND page, not the backend API. The frontend
+    // page extracts the token from the query string and POSTs it to
+    // /api/auth/verify-email on this server. That way the user lands on a
+    // branded confirmation screen, not a JSON response.
+    //
+    // FRONTEND_URL is a comma-separated list; the FIRST entry is the canonical
+    // user-facing frontend (the admin dashboard never receives onboarding emails).
+    const base = this.userFrontendUrl();
+    const verifyUrl = `${base}/verify-email?token=${rawToken}`;
 
     await this.send({
       to,
@@ -91,8 +98,10 @@ export class EmailService implements OnModuleInit {
   }
 
   async sendPasswordResetEmail(to: string, rawToken: string): Promise<void> {
-    const base = this.config.get<string>('APP_URL', 'http://localhost:3450');
-    const resetUrl = `${base}/api/auth/reset-password?token=${rawToken}`;
+    // Same as the verification link: frontend page handles the UX and proxies
+    // the token to /api/auth/reset-password on the backend.
+    const base = this.userFrontendUrl();
+    const resetUrl = `${base}/reset-password?token=${rawToken}`;
 
     await this.send({
       to,
@@ -163,6 +172,21 @@ export class EmailService implements OnModuleInit {
         `Failed to send email to ${message.to}: ${(err as Error).message}`,
       );
     }
+  }
+
+  /**
+   * Returns the canonical USER-facing frontend URL, stripped of any trailing
+   * slash. FRONTEND_URL is a comma-separated list whose first entry is, by
+   * convention, the user app (the management dashboard is in subsequent
+   * entries and never receives transactional emails).
+   */
+  private userFrontendUrl(): string {
+    const raw = this.config.get<string>(
+      'FRONTEND_URL',
+      'http://localhost:3001',
+    );
+    const first = raw.split(',')[0].trim();
+    return first.replace(/\/$/, '');
   }
 
   /**
