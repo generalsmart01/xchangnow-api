@@ -1,3 +1,17 @@
+// src/modules/bank-accounts/dto/create-bank-account.dto.ts
+
+/**
+ * Body schema for POST /bank-accounts/me.
+ *
+ * Uniqueness: the DB enforces unique (userId, bankName, accountNumber) —
+ * the same person can't double-register the same account at the same bank,
+ * but two users CAN share an account number across different banks (and
+ * one user CAN have the same account number at two different banks).
+ *
+ * isDefault semantics: setting true atomically un-flags any existing default
+ * for this user (service handles in a single transaction).
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,

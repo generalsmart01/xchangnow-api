@@ -1,8 +1,24 @@
+// src/modules/wallets/dto/create-wallet.dto.ts
+
+/**
+ * Body schema for POST /wallets (admin).
+ *
+ * `assetNetworkId` is a single FK pointing at an AssetNetwork row (the
+ * asset × network pair from /admin/assets[/networks]). One FK guarantees
+ * the combination is valid by construction — you can't register a Bitcoin
+ * address against Ethereum, for example.
+ *
+ * Address validation here is intentionally permissive (length 20-120 chars).
+ * Per-chain format validation (Bitcoin Bech32, Tron base58, EVM checksum
+ * etc.) would require a per-asset library and is best handled by the human
+ * admin entering the address — they should be double-checking against their
+ * wallet software anyway. A typo in a company wallet is catastrophic
+ * whether or not it's "well-formed".
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CryptoAsset, CryptoNetwork } from '@prisma/client';
 import {
   IsBoolean,
-  IsEnum,
   IsOptional,
   IsString,
   MaxLength,
@@ -11,22 +27,13 @@ import {
 
 export class CreateWalletDto {
   @ApiProperty({
-    enum: CryptoAsset,
-    example: CryptoAsset.BTC,
-    description: 'Crypto asset this address holds: BTC | ETH | USDT | USDC.',
-  })
-  @IsEnum(CryptoAsset)
-  cryptoAsset!: CryptoAsset;
-
-  @ApiProperty({
-    enum: CryptoNetwork,
-    example: CryptoNetwork.BITCOIN,
+    example: 'cmpqe002b0001o81g8k7vmpqr',
     description:
-      'Network the address lives on: BITCOIN | ETHEREUM | TRON | BSC | POLYGON. ' +
-      'Asset+network combo must be valid (e.g. USDT-TRON, BTC-BITCOIN).',
+      'FK to asset_networks.id — the asset × network pair this address holds. ' +
+      'Look up via GET /assets to find valid pair ids.',
   })
-  @IsEnum(CryptoNetwork)
-  network!: CryptoNetwork;
+  @IsString()
+  assetNetworkId!: string;
 
   @ApiProperty({
     example: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
@@ -54,7 +61,7 @@ export class CreateWalletDto {
   @ApiPropertyOptional({
     example: true,
     description:
-      'If false, the wallet won\'t be picked by `pickActiveWallet()` for new ' +
+      "If false, the wallet won't be picked by `pickActiveWallet()` for new " +
       'transactions. Use it to retire an address without deleting historical data.',
     default: true,
   })

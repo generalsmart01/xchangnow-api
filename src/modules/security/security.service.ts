@@ -1,3 +1,33 @@
+// src/modules/security/security.service.ts
+
+/**
+ * SecurityService — the pre-auth risk gate consulted on every login.
+ *
+ * Why this lives BEFORE the password compare in AuthService.login:
+ *   Bcrypt is intentionally slow (~100ms at rounds=12). An attacker
+ *   running credential-stuffing through thousands of stolen email/password
+ *   pairs would exhaust the server's CPU on bcrypt alone. Evaluating risk
+ *   first — counting recent failures per email/IP, scoring the IP via
+ *   IpIntel — lets us refuse obvious abuse in <1ms without touching bcrypt.
+ *
+ * What this service decides:
+ *   - allowed: false  → 401 returned, NO password compare attempted, NO
+ *                       login_attempt row written (to avoid the block
+ *                       perpetually escalating itself)
+ *   - allowed: true   → proceed to password compare; AuthService records
+ *                       the attempt with whatever outcome
+ *
+ * Inputs feeding the score:
+ *   - failed login count for this email in the last 15 min
+ *   - failed login count for this IP in the last 15 min
+ *   - IpIntel signals (VPN / proxy / Tor / datacenter / reputation)
+ *
+ * Outputs (besides allowed/blocked): the same ipIntel signals are
+ * stamped on the UserSession row so the resulting session carries the
+ * risk context for later analysis ("this session was created from a
+ * VPN").
+ */
+
 import { Injectable, Logger } from '@nestjs/common';
 import { RiskSeverity, SecurityEventType } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';

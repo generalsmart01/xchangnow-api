@@ -1,3 +1,13 @@
+// src/modules/transactions/dto/approve-transaction.dto.ts
+
+/**
+ * Body schema for POST /transactions/:id/approve (admin).
+ *
+ * Body is essentially empty — `notes` is optional and only used for the
+ * audit log. The actual approval decision is "yes, this proof checked out"
+ * and doesn't need fields beyond the implicit admin identity.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 

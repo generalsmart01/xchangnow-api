@@ -1,3 +1,27 @@
+// src/modules/wallets/wallets.controller.ts
+
+/**
+ * ─── Endpoints (ALL admin: ADMIN | SUPER_ADMIN) ─────────────────────────────
+ *
+ *   POST   /wallets              body: CreateWalletDto (assetNetworkId + address)
+ *                                201: WalletAddress (with assetNetwork embedded)
+ *                                400: assetNetworkId missing or disabled
+ *                                409: duplicate (assetNetwork + address)
+ *
+ *   GET    /wallets              query: assetNetworkId/assetId/networkId/isActive
+ *                                200: WalletAddress[] (with assetNetwork embedded)
+ *
+ *   GET    /wallets/:id          single wallet
+ *
+ *   PATCH  /wallets/:id          body: UpdateWalletDto (label + isActive only;
+ *                                address is immutable — would orphan history)
+ *
+ *   DELETE /wallets/:id          soft delete (sets isActive=false; row stays
+ *                                so historical transactions retain their ref)
+ *
+ * Controller-level @Roles(ADMIN, SUPER_ADMIN) — no public routes.
+ */
+
 import {
   Body,
   Controller,
@@ -27,13 +51,17 @@ import { WalletsService } from './wallets.service';
 
 const WALLET_EXAMPLE = {
   id: 'cmpgx5rxg000eo85k60xgd3fr',
-  cryptoAsset: 'BTC',
-  network: 'BITCOIN',
+  assetNetworkId: 'cmpqe002b0001o81g8k7vmpqr',
   address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
   label: 'Primary BTC hot wallet',
   isActive: true,
   createdAt: '2026-05-22T12:00:00.000Z',
   updatedAt: '2026-05-22T12:00:00.000Z',
+  assetNetwork: {
+    id: 'cmpqe002b0001o81g8k7vmpqr',
+    asset: { id: 'cmpqd99zz0000o81g4kq8jz5x', symbol: 'BTC', name: 'Bitcoin', decimals: 8 },
+    network: { id: 'cmpqd001a0000o81g4kq8jz5x', code: 'BITCOIN', name: 'Bitcoin', chainId: null },
+  },
 };
 
 @ApiTags('Wallets (admin)')
@@ -50,8 +78,10 @@ export class WalletsController {
     summary: '(Admin) Create a company wallet address',
     description:
       'Registers a wallet that the system will use to receive crypto from ' +
-      'users (SELL flow) and to send crypto to users (BUY/SWAP). The combo ' +
-      '(cryptoAsset, network, address) must be unique.',
+      'users (SELL flow) and to send crypto to users (BUY/SWAP). ' +
+      'Reference the asset-network pair via `assetNetworkId` (look it up via ' +
+      'GET /assets — each asset has a `networks` array with pair ids). ' +
+      '(assetNetworkId, address) must be unique.',
   })
   @ApiResponse({
     status: 201,
@@ -59,8 +89,12 @@ export class WalletsController {
     schema: { example: WALLET_EXAMPLE },
   })
   @ApiResponse({
+    status: 400,
+    description: 'assetNetworkId does not exist or is disabled.',
+  })
+  @ApiResponse({
     status: 409,
-    description: 'Wallet (asset + network + address) already exists.',
+    description: 'Wallet (assetNetwork + address) already exists.',
   })
   create(@Body() dto: CreateWalletDto) {
     return this.wallets.create(dto);
@@ -71,7 +105,8 @@ export class WalletsController {
   @ApiOperation({
     summary: '(Admin) List wallets',
     description:
-      'Lists all wallets, filterable by asset / network / isActive. ' +
+      'Lists all wallets, filterable by assetNetworkId, assetId, networkId, isActive. ' +
+      'Each wallet response includes the embedded assetNetwork with asset + network details. ' +
       'Active wallets are sorted first, then by most-recently-created.',
   })
   @ApiResponse({

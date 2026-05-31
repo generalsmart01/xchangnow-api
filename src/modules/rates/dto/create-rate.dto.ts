@@ -1,7 +1,25 @@
+// src/modules/rates/dto/create-rate.dto.ts
+
+/**
+ * Body schema for POST /rates (admin).
+ *
+ * Creates a new time-series rate snapshot for an Asset (NOT for an
+ * AssetNetwork — rates are per-asset, see ExchangeRate model comment). The
+ * supplied `assetId` must reference an existing, enabled asset; service
+ * validates this before insert.
+ *
+ * `buyRate` and `sellRate` are separate fields — the spread between them is
+ * our platform's fee on BUY/SELL operations. `sellRate < buyRate` by
+ * convention (we buy crypto from users cheaper than we sell to them), but
+ * the schema doesn't enforce — admin can set whatever they want (e.g.
+ * promotional inverted spread).
+ *
+ * Decimal strings, not numbers — same precision-preservation reason as
+ * transaction amounts.
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { CryptoAsset } from '@prisma/client';
 import {
-  IsEnum,
   IsOptional,
   IsString,
   Matches,
@@ -10,12 +28,13 @@ import {
 
 export class CreateRateDto {
   @ApiProperty({
-    enum: CryptoAsset,
-    example: CryptoAsset.BTC,
-    description: 'Crypto asset this rate covers: BTC | ETH | USDT | USDC.',
+    example: 'cmpqd99zz0000o81g4kq8jz5x',
+    description:
+      'FK to assets.id — the asset this rate covers. Look up via GET /assets to find the id ' +
+      'for a given symbol (e.g. "BTC" → cuid).',
   })
-  @IsEnum(CryptoAsset)
-  asset!: CryptoAsset;
+  @IsString()
+  assetId!: string;
 
   @ApiProperty({
     example: '60000000.00',

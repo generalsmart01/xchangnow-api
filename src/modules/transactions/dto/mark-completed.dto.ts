@@ -1,3 +1,14 @@
+// src/modules/transactions/dto/mark-completed.dto.ts
+
+/**
+ * Body schema for POST /transactions/:id/mark-completed (admin, BUY/SWAP only).
+ *
+ * `outboundTxHash` is declared optional in the DTO so SELL submissions
+ * fail in the service layer with a meaningful "SELL completes via Payout"
+ * error rather than a generic "outboundTxHash is required" validation
+ * error. For BUY/SWAP the service enforces presence and returns 400 if missing.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsOptional,

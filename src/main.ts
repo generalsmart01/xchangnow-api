@@ -1,3 +1,27 @@
+// src/main.ts
+
+/**
+ * Application bootstrap. Builds the Nest application from AppModule and
+ * configures the global middleware/pipeline stack BEFORE listening.
+ *
+ * Stack assembly order matters — written linearly here so the reader can
+ * trace what every incoming request goes through:
+ *
+ *   1. /api prefix              all routes are under /api (vs Swagger at /docs)
+ *   2. ValidationPipe (global)  DTOs auto-validated, unknown props rejected
+ *   3. AllExceptionsFilter      catches uncaught errors → envelope JSON
+ *   4. HttpLoggingInterceptor   mints requestId, logs entry + exit
+ *   5. ResponseInterceptor      wraps controller return → success envelope
+ *   6. CORS                     locked to FRONTEND_URL in prod, open in dev
+ *   7. enableShutdownHooks      PrismaService.onModuleDestroy fires on SIGTERM
+ *   8. Swagger UI               mounted at /docs with persisted bearer auth
+ *
+ * The two interceptors are registered in a specific order: HttpLogging
+ * first so it can set req.id BEFORE ResponseInterceptor reads it. On the
+ * way out, RxJS unwinds pipes in reverse — Response maps first, then
+ * HttpLogging's tap logs the outbound line.
+ */
+
 import { NestFactory, Reflector } from '@nestjs/core';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -62,7 +86,7 @@ async function bootstrap() {
 
   // ---------------- Swagger / OpenAPI ----------------
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('XchangeNow API')
+    .setTitle('XchangNow API')
     .setDescription(
       'Fintech backend: auth (with email verification + password reset), ' +
         'users, wallets, transactions (BUY/SELL/SWAP), payouts, rates, security.',
@@ -91,7 +115,7 @@ async function bootstrap() {
   await app.listen(port);
 
   Logger.log(
-    `XchangeNow API running on http://localhost:${port}/api`,
+    `XchangNow API running on http://localhost:${port}/api`,
     'Bootstrap',
   );
   Logger.log(`Swagger UI at http://localhost:${port}/docs`, 'Bootstrap');

@@ -1,3 +1,14 @@
+// src/modules/health/health.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *   GET    /health        public; no auth
+ *                         200: { status, service, uptimeSeconds, timestamp }
+ *
+ * No request body, no params. Always returns 200 if the process is alive.
+ */
+
 import { Controller, Get } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { LogMessage } from '../../common/decorators/log-message.decorator';
@@ -23,7 +34,7 @@ export class HealthController {
     schema: {
       example: {
         status: 'ok',
-        service: 'xchangenow-api',
+        service: 'xchangnow-api',
         uptimeSeconds: 1342,
         timestamp: '2026-05-22T14:30:00.000Z',
       },

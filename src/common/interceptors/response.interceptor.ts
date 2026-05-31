@@ -1,3 +1,22 @@
+// src/common/interceptors/response.interceptor.ts
+
+/**
+ * Global success-response envelope wrapper.
+ *
+ * Wraps every controller return value into the standard shape:
+ *   { success: true, message, data, meta: { requestId, timestamp,
+ *     durationMs, path } }
+ *
+ * `message` is pulled from the @LogMessage() metadata if set, otherwise
+ * defaults to "Success". `data` is the literal return value of the
+ * controller method. `meta.requestId` is read from `req.id` (minted
+ * by HttpLoggingInterceptor earlier in the chain — DO NOT regenerate
+ * here or terminal-log requestIds won't match response requestIds).
+ *
+ * Errors are NOT wrapped by this interceptor — AllExceptionsFilter
+ * handles the parallel error envelope (`success: false, error, ...`).
+ */
+
 import {
   CallHandler,
   ExecutionContext,

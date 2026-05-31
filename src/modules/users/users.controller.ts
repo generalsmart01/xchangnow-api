@@ -1,7 +1,57 @@
+// src/modules/users/users.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *  --- Self-service (any authenticated user) ---
+ *
+ *   GET    /users/me                      JWT
+ *                                         200: full SafeUser
+ *
+ *   PATCH  /users/me                      JWT, body: UpdateUserDto
+ *                                         200: updated SafeUser
+ *
+ *  (Bank account CRUD moved to its own module — see
+ *   modules/bank-accounts/bank-accounts.controller.ts for /bank-accounts/me/*)
+ *
+ *  --- Admin ---
+ *
+ *   GET    /users                         JWT + ADMIN|SUPER_ADMIN
+ *                                         query: page, pageSize, status, search
+ *                                         200: { users[], total, page, pageSize }
+ *
+ *   GET    /users/:id                     JWT + ADMIN|SUPER_ADMIN
+ *                                         200: SafeUser
+ *                                         404: user not found
+ *                                         (PiiAccessLog: PROFILE READ)
+ *
+ *   PATCH  /users/:id/status              JWT + ADMIN|SUPER_ADMIN,
+ *                                         body: AdminUpdateUserStatusDto
+ *                                         200: updated SafeUser
+ *                                         403: admin tried to deactivate self
+ *                                         404: user not found
+ *                                         (PiiAccessLog: USER UPDATE)
+ *
+ *   POST   /users/:id/anonymize           JWT + ADMIN|SUPER_ADMIN,
+ *                                         body: AnonymizeUserDto
+ *                                         200: { message, anonymizedAt }
+ *                                         403: self / SUPER_ADMIN / wrong email
+ *                                         404: user not found
+ *                                         409: user already anonymized
+ *                                         (right-to-be-forgotten flow; scrubs
+ *                                         PII across User+Profile+BankAccount,
+ *                                         preserves audit + transaction history.
+ *                                         PiiAccessLog: PROFILE ANONYMIZE,
+ *                                         SecurityLog: HIGH severity)
+ *
+ * All responses wrapped by ResponseInterceptor into the standard envelope.
+ * Self-service routes scope to req.user.id; admin routes accept :id but
+ * RolesGuard enforces ADMIN|SUPER_ADMIN.
+ */
+
 import {
   Body,
   Controller,
-  Delete,
   Get,
   HttpCode,
   HttpStatus,
@@ -25,15 +75,15 @@ import { JwtAuthGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { AdminUpdateUserStatusDto } from './dto/admin-update-user-status.dto';
-import { CreateBankAccountDto } from './dto/create-bank-account.dto';
+import { AnonymizeUserDto } from './dto/anonymize-user.dto';
 import { ListUsersQueryDto } from './dto/list-users-query.dto';
-import { UpdateBankAccountDto } from './dto/update-bank-account.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { AnonymizationService } from './anonymization.service';
 import { UsersService } from './users.service';
 
 const USER_EXAMPLE = {
   id: 'cmpgx5qjh0000o85kzmyj8zpy',
-  email: 'michael@xchangenow.com',
+  email: 'michael@xchangnow.com',
   phoneNumber: '+2348012345678',
   firstName: 'Michael',
   lastName: 'Adeleke',
@@ -47,23 +97,29 @@ const USER_EXAMPLE = {
   deletedAt: null,
 };
 
-const BANK_ACCOUNT_EXAMPLE = {
-  id: 'cmpgx5ryo000go85kxlbxwzn7',
-  userId: 'cmpgx5qjh0000o85kzmyj8zpy',
-  bankName: 'Guaranty Trust Bank',
-  accountNumber: '0123456789',
-  accountName: 'Michael Adeleke',
-  isDefault: true,
-  createdAt: '2026-05-22T13:00:00.000Z',
-  updatedAt: '2026-05-22T13:00:00.000Z',
-};
-
+/**
+ * UsersController — the self-service + admin surface for User + Profile.
+ *
+ * Two route shapes coexist:
+ *   - `/users/me/...`  → operate on the authenticated caller (any role)
+ *   - `/users/:id/...` → admin-only operations on arbitrary users
+ *
+ * The controller-level @UseGuards installs both JwtAuthGuard (always on) +
+ * RolesGuard (only enforces when @Roles is set on a route). The admin
+ * routes add @Roles(ADMIN, SUPER_ADMIN) per-handler.
+ *
+ * Bank account CRUD moved out of this controller into BankAccountsController
+ * (financial PII tier — own module, own routes at /bank-accounts/me/*).
+ */
 @ApiTags('Users')
 @ApiBearerAuth('JWT-auth')
 @Controller('users')
 @UseGuards(JwtAuthGuard, RolesGuard) // all routes require JWT; RolesGuard only enforces if @Roles is set
 export class UsersController {
-  constructor(private readonly users: UsersService) {}
+  constructor(
+    private readonly users: UsersService,
+    private readonly anonymization: AnonymizationService,
+  ) {}
 
   // ----------------------------- self-service -----------------------------
 
@@ -99,98 +155,11 @@ export class UsersController {
     return this.users.updateProfile(user.id, dto);
   }
 
-  @Get('me/bank-accounts')
-  @LogMessage('Listed bank accounts')
-  @ApiOperation({
-    summary: 'List my bank accounts',
-    description:
-      'Returns all bank accounts owned by the current user, default first ' +
-      '(then oldest first within the rest).',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Array of bank accounts.',
-    schema: { example: [BANK_ACCOUNT_EXAMPLE] },
-  })
-  listBankAccounts(@CurrentUser() user: AuthenticatedUser) {
-    return this.users.listBankAccounts(user.id);
-  }
-
-  @Post('me/bank-accounts')
-  @LogMessage('Bank account added')
-  @ApiOperation({
-    summary: 'Add a bank account',
-    description:
-      'Creates a bank account for the current user. If `isDefault=true`, any ' +
-      'previously-default account is auto-unset (atomic, in a transaction). ' +
-      'A SELL transaction cannot be created without at least one default ' +
-      'bank account — it\'s where the payout will be sent.',
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Bank account created.',
-    schema: { example: BANK_ACCOUNT_EXAMPLE },
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'You already have a bank account with this bank + account number.',
-  })
-  addBankAccount(
-    @CurrentUser() user: AuthenticatedUser,
-    @Body() dto: CreateBankAccountDto,
-  ) {
-    return this.users.createBankAccount(user.id, dto);
-  }
-
-  @Patch('me/bank-accounts/:id')
-  @LogMessage('Bank account updated')
-  @ApiOperation({
-    summary: 'Update one of my bank accounts',
-    description:
-      'Updates the named fields. Setting `isDefault=true` makes this the new ' +
-      'default and unsets the previous default in the same transaction.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Updated bank account.',
-    schema: { example: BANK_ACCOUNT_EXAMPLE },
-  })
-  @ApiResponse({
-    status: 404,
-    description:
-      'Bank account not found OR not owned by you (same 404 either way to ' +
-      'avoid leaking existence of other users\' accounts).',
-  })
-  updateBankAccount(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
-    @Body() dto: UpdateBankAccountDto,
-  ) {
-    return this.users.updateBankAccount(user.id, id, dto);
-  }
-
-  @Delete('me/bank-accounts/:id')
-  @LogMessage('Bank account deleted')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({
-    summary: 'Delete a bank account',
-    description:
-      'Hard delete. Refused (409) if any payouts reference this account — ' +
-      'we don\'t orphan payout history. Mark inactive on user-side instead, ' +
-      'or wait for outstanding payouts to settle.',
-  })
-  @ApiResponse({ status: 204, description: 'Deleted.' })
-  @ApiResponse({
-    status: 409,
-    description: 'Bank account has payouts attached and cannot be deleted.',
-  })
-  @ApiResponse({ status: 404, description: 'Not found / not yours.' })
-  removeBankAccount(
-    @CurrentUser() user: AuthenticatedUser,
-    @Param('id') id: string,
-  ) {
-    return this.users.deleteBankAccount(user.id, id);
-  }
+  // Bank account CRUD lives in modules/bank-accounts now —
+  // GET    /bank-accounts/me
+  // POST   /bank-accounts/me
+  // PATCH  /bank-accounts/me/:id
+  // DELETE /bank-accounts/me/:id
 
   // -------------------------------- admin --------------------------------
 
@@ -216,8 +185,11 @@ export class UsersController {
     },
   })
   @ApiResponse({ status: 403, description: 'Not an admin.' })
-  listAll(@Query() query: ListUsersQueryDto) {
-    return this.users.listUsers(query);
+  listAll(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Query() query: ListUsersQueryDto,
+  ) {
+    return this.users.listUsers(admin.id, query);
   }
 
   @Get(':id')
@@ -229,8 +201,11 @@ export class UsersController {
   })
   @ApiResponse({ status: 200, schema: { example: USER_EXAMPLE } })
   @ApiResponse({ status: 404, description: 'User not found.' })
-  getById(@Param('id') id: string) {
-    return this.users.findByIdAsAdmin(id);
+  getById(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.users.findByIdAsAdmin(admin.id, id);
   }
 
   @Patch(':id/status')
@@ -253,5 +228,59 @@ export class UsersController {
     @Body() dto: AdminUpdateUserStatusDto,
   ) {
     return this.users.updateUserStatus(admin.id, id, dto);
+  }
+
+  @Post(':id/anonymize')
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @LogMessage('User anonymized (admin)')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "(Admin) Anonymize a user's PII (right-to-be-forgotten)",
+    description:
+      "Irreversible. Atomically scrubs the user's PII across User, " +
+      'Profile, and BankAccount tables; revokes all sessions; deletes ' +
+      'outstanding verification/reset/invite tokens. Transactions, ' +
+      'payouts, and audit logs are PRESERVED — that\'s the whole reason ' +
+      "we anonymize rather than hard-delete.\n\n" +
+      'Body must include `confirmEmail` matching the target user\'s ' +
+      'current email (case-insensitive). This is a guard against ' +
+      'fat-fingering the wrong user id. The `reason` is mandatory and ' +
+      'recorded in security_logs (HIGH severity) + admin_logs.\n\n' +
+      'Refused for:\n' +
+      '- Self-anonymization (403)\n' +
+      '- SUPER_ADMIN target (403)\n' +
+      '- Already-anonymized user (409)\n' +
+      '- confirmEmail mismatch (403)\n' +
+      '- User not found (404)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'User anonymized.',
+    schema: {
+      example: {
+        message: 'User anonymized',
+        anonymizedAt: '2026-05-28T14:30:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'Self-anonymization attempt, SUPER_ADMIN target, or confirmEmail mismatch.',
+  })
+  @ApiResponse({ status: 404, description: 'User not found.' })
+  @ApiResponse({ status: 409, description: 'User is already anonymized.' })
+  async anonymize(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: AnonymizeUserDto,
+  ): Promise<{ message: string; anonymizedAt: Date }> {
+    const { anonymizedAt } = await this.anonymization.anonymizeUser(
+      admin.id,
+      id,
+      dto.confirmEmail,
+      dto.reason,
+    );
+    return { message: 'User anonymized', anonymizedAt };
   }
 }

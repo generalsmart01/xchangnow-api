@@ -1,3 +1,47 @@
+// src/modules/transactions/transactions.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *  --- Customer (require verified email) ---
+ *
+ *   POST   /transactions/sell             body: CreateSellDto
+ *                                         201: Transaction + walletAddress
+ *                                         400: no default bank / no active wallet
+ *
+ *   POST   /transactions/buy              body: CreateBuyDto
+ *                                         201: Transaction + paymentInstructions
+ *
+ *   POST   /transactions/swap             body: CreateSwapDto
+ *                                         201: Transaction (SWAP)
+ *                                         400: same asset / no active wallet
+ *
+ *   POST   /transactions/me/:id/proof     body: UploadProofDto
+ *                                         201: TransactionProof; tx → UNDER_REVIEW
+ *                                         400: wrong proof type / bad state
+ *                                         409: duplicate tx hash (anti-replay)
+ *
+ *   GET    /transactions/me               query: page/pageSize/status/type/asset
+ *                                         200: { transactions[], total, page, pageSize }
+ *
+ *   GET    /transactions/me/:id           200: Transaction w/ proofs[] + walletAddress
+ *                                              + paymentInstructions (BUY only)
+ *                                         404: not found / not yours
+ *
+ *  --- Admin (ADMIN | SUPER_ADMIN) ---
+ *
+ *   GET    /transactions                  cross-user listing
+ *   GET    /transactions/:id              full record w/ proofs + user
+ *   POST   /transactions/:id/approve      UNDER_REVIEW → APPROVED
+ *                                         (SELL also creates a PENDING Payout)
+ *   POST   /transactions/:id/reject       → REJECTED (rejectedReason required)
+ *   POST   /transactions/:id/mark-completed  APPROVED → COMPLETED for BUY/SWAP
+ *                                            (SELL completes via Payout PAID instead)
+ *
+ * All routes JWT-gated. Customer routes that move money also require
+ * VerifiedGuard via @RequireVerified() — 403 if email not verified.
+ */
+
 import {
   Body,
   Controller,
@@ -34,15 +78,30 @@ import { RejectTransactionDto } from './dto/reject-transaction.dto';
 import { UploadProofDto } from './dto/upload-proof.dto';
 import { TransactionsService } from './transactions.service';
 
+// Embedded asset-network shape used inside transaction example payloads.
+const BTC_BITCOIN_EMBED = {
+  id: 'cmpqe002b0001o81g8k7vmpqr',
+  asset: { id: 'cmpqd99zz0000o81g4kq8jz5x', symbol: 'BTC', name: 'Bitcoin', decimals: 8 },
+  network: { id: 'cmpqd001a0000o81g4kq8jz5x', code: 'BITCOIN', name: 'Bitcoin', chainId: null },
+};
+
+const USDT_TRON_EMBED = {
+  id: 'cmpqe003c0002o81g4abcdef',
+  asset: { id: 'cmpqe000a0001o81gxxxx0000', symbol: 'USDT', name: 'Tether USD', decimals: 6 },
+  network: { id: 'cmpqd002b0001o81g8tttttron', code: 'TRON', name: 'Tron', chainId: null },
+};
+
 const SELL_EXAMPLE = {
   id: 'cmpgzemmo0009o8nkp8cc9pk7',
   referenceCode: 'XCN-A55A2689',
   userId: 'cmpgx5qjh0000o85kzmyj8zpy',
   type: 'SELL',
   status: 'PENDING',
-  cryptoAsset: 'BTC',
-  network: 'BITCOIN',
+  assetNetworkId: BTC_BITCOIN_EMBED.id,
   cryptoAmount: '0.005',
+  toAssetNetworkId: null,
+  toAmount: null,
+  toAddress: null,
   fiatAmount: '290000.00',
   fiatCurrency: 'NGN',
   rate: '58000000.00',
@@ -56,10 +115,11 @@ const SELL_EXAMPLE = {
   completedAt: null,
   createdAt: '2026-05-22T14:30:00.000Z',
   updatedAt: '2026-05-22T14:30:00.000Z',
+  assetNetwork: BTC_BITCOIN_EMBED,
+  toAssetNetwork: null,
   walletAddress: {
     id: 'cmpgx5rxg000eo85k60xgd3fr',
-    cryptoAsset: 'BTC',
-    network: 'BITCOIN',
+    assetNetworkId: BTC_BITCOIN_EMBED.id,
     address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
     label: 'Primary BTC',
     isActive: true,
@@ -72,17 +132,19 @@ const BUY_EXAMPLE = {
   userId: 'cmpgx5qjh0000o85kzmyj8zpy',
   type: 'BUY',
   status: 'AWAITING_PAYMENT',
-  cryptoAsset: 'USDT',
-  network: 'TRON',
+  assetNetworkId: USDT_TRON_EMBED.id,
   cryptoAmount: '20.000000000000000000',
+  toAssetNetworkId: null,
   fiatAmount: '30000.00',
   fiatCurrency: 'NGN',
   rate: '1500.00',
   walletAddressId: null,
+  assetNetwork: USDT_TRON_EMBED,
+  toAssetNetwork: null,
   paymentInstructions: {
     bankName: 'Wema Bank',
     accountNumber: '0123456789',
-    accountName: 'XchangeNow Ltd',
+    accountName: 'XchangNow Ltd',
     reference: 'XCN-7503C7E4',
   },
   createdAt: '2026-05-22T14:30:00.000Z',
@@ -93,19 +155,18 @@ const SWAP_EXAMPLE = {
   referenceCode: 'XCN-A55A2689',
   type: 'SWAP',
   status: 'PENDING',
-  cryptoAsset: 'BTC',
-  network: 'BITCOIN',
+  assetNetworkId: BTC_BITCOIN_EMBED.id,
   cryptoAmount: '0.005',
-  toAsset: 'USDT',
-  toNetwork: 'TRON',
+  toAssetNetworkId: USDT_TRON_EMBED.id,
   toAmount: '193.333333333333333334',
   toAddress: 'TJYeasTPa6gpEEfYYhfA3HzfwPV82dB9Vt',
   rate: '38666.666666666666667',
   fiatAmount: null,
   fiatCurrency: null,
+  assetNetwork: BTC_BITCOIN_EMBED,
+  toAssetNetwork: USDT_TRON_EMBED,
   walletAddress: {
-    cryptoAsset: 'BTC',
-    network: 'BITCOIN',
+    assetNetworkId: BTC_BITCOIN_EMBED.id,
     address: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
   },
 };
@@ -119,10 +180,22 @@ const PROOF_EXAMPLE = {
   uploadedAt: '2026-05-22T14:35:00.000Z',
 };
 
+/**
+ * TransactionsController — HTTP surface for crypto-fiat exchange flows.
+ *
+ * All three guards are attached at the class level so every route gets
+ * them in DI; the guards only ENFORCE when their metadata decorators are
+ * present (RolesGuard reads @Roles, VerifiedGuard reads @RequireVerified).
+ * This lets one controller serve both customer + admin routes without
+ * duplicating @UseGuards on every handler.
+ *
+ * No business logic here — every method is one delegation call into
+ * TransactionsService. The controller's job is HTTP wiring, Swagger,
+ * and log labels.
+ */
 @ApiTags('Transactions')
 @ApiBearerAuth('JWT-auth')
 @Controller('transactions')
-// JWT required everywhere; @Roles enforced where set; @RequireVerified enforced where set.
 @UseGuards(JwtAuthGuard, RolesGuard, VerifiedGuard)
 export class TransactionsController {
   constructor(private readonly transactions: TransactionsService) {}
@@ -196,7 +269,8 @@ export class TransactionsController {
       'we send TO-asset to their `toAddress` after admin approval. ' +
       'Rate is derived from existing NGN-pegged rates: ' +
       '`pairRate = fromSellRate / toBuyRate`. The buy-sell spread is our fee. ' +
-      '`fromAsset` must differ from `toAsset` (400 if equal). ' +
+      '`fromAssetNetworkId` must reference a DIFFERENT asset than `toAssetNetworkId` ' +
+      '(same-asset cross-network bridging is rejected as 400 — bridging will be a separate feature). ' +
       'No fiat side — `fiatAmount`/`fiatCurrency` are null.',
   })
   @ApiResponse({
@@ -207,7 +281,7 @@ export class TransactionsController {
   @ApiResponse({
     status: 400,
     description:
-      'Same asset on both sides, no active wallet for FROM asset/network, ' +
+      'Same asset on both sides (bridging), no active wallet for FROM pair, ' +
       'or validation error.',
   })
   @ApiResponse({ status: 403, description: 'Email not verified.' })
@@ -354,7 +428,7 @@ export class TransactionsController {
         proofs: [PROOF_EXAMPLE],
         user: {
           id: 'cmpgx5qjh0000o85kzmyj8zpy',
-          email: 'michael@xchangenow.com',
+          email: 'michael@xchangnow.com',
           firstName: 'Michael',
           lastName: 'Adeleke',
         },

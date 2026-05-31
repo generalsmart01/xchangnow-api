@@ -1,3 +1,17 @@
+// src/modules/users/dto/list-users-query.dto.ts
+
+/**
+ * Query schema for GET /users (admin paginated user list).
+ *
+ * Pagination is 1-indexed (page=1 is the first page) to match what FE
+ * tables typically render. Max pageSize=100 — keeps single-query cost
+ * bounded and dissuades the FE from "just fetch them all" patterns.
+ *
+ * Search is a substring match (case-insensitive) on email + firstName +
+ * lastName. The Prisma query OR's the three fields; not a fancy full-text
+ * search but adequate for the admin "find user by partial name" workflow.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserStatus } from '@prisma/client';
 import { Type } from 'class-transformer';

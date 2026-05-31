@@ -1,3 +1,12 @@
+// src/common/decorators/log-message.decorator.ts
+
+/**
+ * @LogMessage('...') — attach a human-readable label to a route. Read by
+ * HttpLoggingInterceptor and printed on the per-request log line. Used to
+ * make terminal logs read like a story (`User registered`, `Login failed`)
+ * instead of just method names.
+ */
+
 import { SetMetadata } from '@nestjs/common';
 
 /**

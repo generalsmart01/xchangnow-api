@@ -1,3 +1,15 @@
+// src/modules/users/dto/admin-update-user-status.dto.ts
+
+/**
+ * Body schema for PATCH /users/:id/status (admin).
+ *
+ * Used to suspend / reactivate / re-flag for verification. The service
+ * refuses self-deactivation — admins can't lock themselves out.
+ *
+ * `reason` is optional but strongly encouraged — it's captured in both
+ * user_activity_logs and pii_access_logs for compliance review.
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserStatus } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';

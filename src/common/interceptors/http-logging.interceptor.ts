@@ -1,3 +1,23 @@
+// src/common/interceptors/http-logging.interceptor.ts
+
+/**
+ * Global HTTP request/response logger.
+ *
+ * For every incoming request, mints a UUID and stashes it on `req.id` —
+ * the SAME id then surfaces in the response envelope as `meta.requestId`
+ * AND in every log line about the request. That correlation lets you take
+ * a user's reported requestId and grep the API logs for the full picture
+ * (entry, service-level logs, exit, exceptions).
+ *
+ * Logs ONE line on request entry (with redacted body) and ONE on exit
+ * (status code + latency + the @LogMessage label). 4xx exits go through
+ * `warn`, 5xx through `error`; 2xx-3xx through `log`.
+ *
+ * Body redaction strips known-sensitive field names (password, token,
+ * accessToken, refreshToken, etc.) before printing so secrets never land
+ * in stdout.
+ */
+
 import {
   CallHandler,
   ExecutionContext,

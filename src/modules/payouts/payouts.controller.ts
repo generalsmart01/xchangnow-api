@@ -1,3 +1,30 @@
+// src/modules/payouts/payouts.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *  --- Customer (own payouts) ---
+ *
+ *   GET    /payouts/me           query: page/pageSize/status
+ *                                200: { payouts[], total, page, pageSize }
+ *
+ *   GET    /payouts/me/:id       200: Payout with transaction + bankAccount
+ *                                404: not found / not yours
+ *
+ *  --- Admin (ADMIN | SUPER_ADMIN) ---
+ *
+ *   GET    /payouts              cross-user paginated listing
+ *   GET    /payouts/:id          full record
+ *   PATCH  /payouts/:id/status   body: UpdatePayoutStatusDto
+ *                                200: state-machine transition (atomic with side
+ *                                effects — PAID cascades tx → COMPLETED)
+ *                                400: invalid transition (e.g. PAID is terminal)
+ *                                404: payout not found
+ *
+ * Only SELL transactions generate payouts (auto-created on approval).
+ * BUY and SWAP complete via admin /mark-completed instead.
+ */
+
 import {
   Body,
   Controller,
@@ -43,9 +70,14 @@ const PAYOUT_EXAMPLE = {
     referenceCode: 'XCN-7503C7E4',
     type: 'SELL',
     status: 'APPROVED',
-    cryptoAsset: 'BTC',
+    assetNetworkId: 'cmpqe002b0001o81g8k7vmpqr',
     cryptoAmount: '0.005',
     fiatAmount: '290000.00',
+    assetNetwork: {
+      id: 'cmpqe002b0001o81g8k7vmpqr',
+      asset: { id: 'cmpqd99zz0000o81g4kq8jz5x', symbol: 'BTC', name: 'Bitcoin', decimals: 8 },
+      network: { id: 'cmpqd001a0000o81g4kq8jz5x', code: 'BITCOIN', name: 'Bitcoin', chainId: null },
+    },
   },
   bankAccount: {
     bankName: 'Guaranty Trust Bank',

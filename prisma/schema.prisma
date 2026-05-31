@@ -1,4 +1,4 @@
-// XchangeNow - Prisma Production Schema
+// XchangNow - Prisma Production Schema
 
 generator client {
   provider = "prisma-client-js"
@@ -51,20 +51,12 @@ enum ProofType {
   OTHER
 }
 
-enum CryptoAsset {
-  BTC
-  ETH
-  USDT
-  USDC
-}
-
-enum CryptoNetwork {
-  BITCOIN
-  ETHEREUM
-  TRON
-  BSC
-  POLYGON
-}
+// CryptoAsset and CryptoNetwork are NO LONGER enums — they are now database
+// tables (see `Asset`, `Network`, `AssetNetwork` models below). This allows
+// admins to add new coins and networks at runtime via /admin/assets and
+// /admin/networks endpoints, without a code deploy. The previous enum values
+// (BTC/ETH/USDT/USDC × BITCOIN/ETHEREUM/TRON/BSC/POLYGON) are seeded into
+// these tables by prisma/seed.ts.
 
 enum PayoutStatus {
   PENDING
@@ -84,6 +76,16 @@ enum NotificationStatus {
   SENT
   FAILED
   READ
+}
+
+// KYC review state for the manual verification flow. NONE = never submitted.
+// Submission moves to PENDING; admin review settles it to APPROVED or REJECTED.
+// REJECTED users can resubmit (which flips them back to PENDING).
+enum KycStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum RiskSeverity {
@@ -107,16 +109,62 @@ enum SecurityEventType {
 // USERS
 // ============================================================================
 
+// User = authentication identity + operational metadata.
+//
+// PII tier: stores MINIMUM authentication-related PII. Specifically `email`
+// (PII — used for login + recovery) and `lastLoginIp` (technical/security
+// personal data — used for risk scoring + "you signed in from..." emails).
+// This is intentional. Heavier human-identity PII (firstName, lastName,
+// phoneNumber, future BVN/NIN/DOB/address) lives on the Profile model.
+// Financial PII (bank details) lives on BankAccount. Technical/security
+// personal data (full session info, login attempts, device fingerprints,
+// VPN/proxy flags, risk scores) lives on UserSession / LoginAttempt /
+// DeviceRiskProfile / SecurityLog / IpReputationLog.
+//
+// This four-tier split (account / profile / financial / technical) lets us:
+//   - apply different access controls per tier (auth layer reads User
+//     freely; only profile + KYC flows read Profile; only payout services
+//     read full BankAccount; only security tooling reads session logs)
+//   - scrub Profile + BankAccount on the right-to-be-forgotten path while
+//     keeping the User row (with anonymized email) for audit continuity
+//   - log PII access (see PiiAccessLog) at the right granularity per tier
+//   - keep the FE API surface unchanged (services flatten User + Profile
+//     back into a single response shape)
 model User {
   id              String     @id @default(cuid())
-  email           String     @unique
-  phoneNumber     String?    @unique @map("phone_number")
+  // Email is stored as TWO fields per the PII doc §27, same pattern as
+  // Profile.phoneNumber:
+  //   - email           = original input the user typed (e.g. "Michael@Example.COM").
+  //                       Preserved for display + audit. NOT unique.
+  //   - emailNormalized = canonical lowercased + trimmed form, used for all
+  //                       lookups (login, password reset, resend verification)
+  //                       and uniqueness. Catches case-variant duplicates
+  //                       ("USER@x.com" vs "user@x.com" → same normalized).
+  //
+  // Nullable at the schema level for migration safety — existing rows are
+  // backfilled (see migration notes). Services ALWAYS set this when setting
+  // email; treat it as effectively non-null in application code.
+  email           String
+  emailNormalized String?    @unique @map("email_normalized")
   passwordHash    String     @map("password_hash")
-  firstName       String     @map("first_name")
-  lastName        String     @map("last_name")
   role            UserRole   @default(USER)
   status          UserStatus @default(PENDING_VERIFICATION)
   isEmailVerified Boolean    @default(false) @map("is_email_verified")
+
+  // ── Referral graph ───────────────────────────────────────────────────────
+  // `referralCode` is auto-generated at user creation (XCN-XXXXXX); stable
+  // for the life of the account. Stored even on soft-deleted users so
+  // historical referral chains stay valid.
+  //
+  // Schema-level nullable for migration safety — existing pre-migration
+  // rows backfill via seed (see seed.ts backfillReferralCodes). Services
+  // ALWAYS set this on creation; treat as effectively non-null in app code.
+  //
+  // `referredById` is set ONCE at registration if the new user supplied a
+  // valid code. Null for organic signups. Single-hop only — we do not
+  // implement multi-level referrals.
+  referralCode String? @unique @map("referral_code")
+  referredById String? @map("referred_by_id")
 
   lastLoginAt DateTime? @map("last_login_at")
   lastLoginIp String?   @map("last_login_ip")
@@ -124,6 +172,8 @@ model User {
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
   deletedAt DateTime? @map("deleted_at")
+
+  profile Profile?
 
   bankAccounts BankAccount[]
   sessions     UserSession[]
@@ -139,15 +189,110 @@ model User {
 
   emailVerificationTokens EmailVerificationToken[]
   passwordResetTokens     PasswordResetToken[]
+  inviteTokens            InviteToken[]            @relation("InviteRecipient")
+  sentInvites             InviteToken[]            @relation("InviteIssuer")
 
   loginAttempts  LoginAttempt[]
   deviceProfiles DeviceRiskProfile[]
   securityLogs   SecurityLog[]
   adminLogs      AdminLog[]
 
+  // PII access audit — see PiiAccessLog model. Two relations because a user
+  // can appear as either the actor (the one accessing PII) or the target
+  // (the one whose PII was accessed). Most admins will only show up as
+  // actors; most regular users will only show up as targets.
+  piiAccessAsActor  PiiAccessLog[] @relation("PiiAccessActor")
+  piiAccessAsTarget PiiAccessLog[] @relation("PiiAccessTarget")
+
+  // Profiles this user (as admin) reviewed during KYC. Populated for admins
+  // who approve/reject KYC submissions; empty for regular users.
+  reviewedKycs Profile[] @relation("KycReviewer")
+
+  // Referral graph relations
+  referredBy           User?                @relation("Referral", fields: [referredById], references: [id])
+  referees             User[]               @relation("Referral")
+  commissionsEarned    ReferralCommission[] @relation("CommissionEarner")
+  commissionsGenerated ReferralCommission[] @relation("CommissionSource")
+
   @@index([status])
   @@index([deletedAt])
   @@map("users")
+}
+
+// Profile = PII (Personally Identifiable Information) per NDPR / GDPR.
+// 1:1 with User. Separated so:
+//   - "Right to be forgotten" anonymizes Profile fields (firstName="[DELETED]",
+//     phoneNumber=null) while User keeps its row + status=DEACTIVATED for
+//     audit retention (transactions/payouts must legally persist).
+//   - Future KYC fields (dateOfBirth, BVN, NIN, address, occupation) live
+//     here, not on User.
+//   - Services that don't need PII (e.g. session validation) import User
+//     only — data minimization.
+model Profile {
+  id        String @id @default(cuid())
+  userId    String @unique @map("user_id")
+  firstName String @map("first_name")
+  lastName  String @map("last_name")
+
+  // Phone is stored as TWO fields, per the PII doc §27:
+  //   - phoneNumber           = original input the user typed
+  //                             (e.g. "0801 234 5678" or "+234 801 234 5678").
+  //                             Display-friendly. NOT unique.
+  //   - phoneNumberNormalized = canonical E.164 form ("+2348012345678")
+  //                             produced by libphonenumber-js at validation
+  //                             time. Used for uniqueness + lookups so two
+  //                             users can't register the same number in
+  //                             different formats.
+  // Both nullable — phone is optional at registration. When one is set, the
+  // other MUST be set too (enforced in service layer, not schema).
+  phoneNumber           String? @map("phone_number")
+  phoneNumberNormalized String? @unique @map("phone_number_normalized")
+
+  // KYC — required for large transactions (NDPR sensitive personal data).
+  //
+  // BVN and NIN are NEVER stored as plain text per the PII rulebook §28.
+  // Instead each is stored as TWO columns:
+  //   - <name>Encrypted = AES-256-GCM ciphertext of the raw value, used when
+  //                       legitimate verification calls (NIBSS, NIMC) need
+  //                       the cleartext. Requires KYC_ENCRYPTION_KEY env var.
+  //   - <name>Hash      = HMAC-SHA256(rawValue, KYC_HASH_KEY) — deterministic,
+  //                       used for uniqueness + duplicate detection without
+  //                       ever decrypting. The @unique constraint lives here.
+  //
+  // A DB leak alone (without both env-var keys) reveals nothing useful: the
+  // hash is unreversible, the ciphertext needs the encryption key.
+  dateOfBirth  DateTime? @map("date_of_birth")
+  bvnEncrypted String?   @map("bvn_encrypted")
+  bvnHash      String?   @unique @map("bvn_hash")
+  ninEncrypted String?   @map("nin_encrypted")
+  ninHash      String?   @unique @map("nin_hash")
+  // addressLine String?   @map("address_line")
+  // city        String?
+  // state       String?
+  // country     String?   @default("NG")
+
+  // ── KYC review state (manual verification flow) ──────────────────────────
+  // The actual identity numbers live in bvn*/nin* above; these fields track
+  // the review workflow: did the user submit? did an admin approve? when?
+  //
+  // selfieUrl is just a URL to the image hosted on Cloudinary (or wherever the
+  // FE uploaded to). The backend never stores the binary; the URL is enough
+  // for the admin review screen.
+  kycStatus          KycStatus @default(NONE) @map("kyc_status")
+  kycSubmittedAt     DateTime? @map("kyc_submitted_at")
+  kycReviewedAt      DateTime? @map("kyc_reviewed_at")
+  kycReviewedById    String?   @map("kyc_reviewed_by_id")
+  kycRejectionReason String?   @map("kyc_rejection_reason")
+  selfieUrl          String?   @map("selfie_url")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user        User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kycReviewer User? @relation("KycReviewer", fields: [kycReviewedById], references: [id])
+
+  @@index([kycStatus])
+  @@map("profiles")
 }
 
 // ============================================================================
@@ -240,6 +385,35 @@ model PasswordResetToken {
 }
 
 // ============================================================================
+// STAFF INVITE TOKENS
+// ============================================================================
+// Issued by SUPER_ADMIN when inviting new staff (ADMIN / OPS / CUSTOMER_SERVICE).
+// Parallel to PasswordResetToken but with:
+//   - 24h TTL (invites take longer to act on than a password reset)
+//   - `invitedById` for audit (who invited this person)
+//   - `role` snapshot — what role the invitee was originally invited to
+// Kept as a separate model (not a "kind" discriminator on PasswordResetToken)
+// to avoid mixing semantics and to keep the audit trail unambiguous.
+
+model InviteToken {
+  id          String    @id @default(cuid())
+  userId      String    @map("user_id")
+  tokenHash   String    @unique @map("token_hash")
+  invitedById String    @map("invited_by_id")
+  role        UserRole // role being granted on acceptance (for audit)
+  expiresAt   DateTime  @map("expires_at")
+  usedAt      DateTime? @map("used_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  user    User @relation("InviteRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  inviter User @relation("InviteIssuer", fields: [invitedById], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([invitedById])
+  @@map("invite_tokens")
+}
+
+// ============================================================================
 // USER ACTIVITY LOGS
 // ============================================================================
 
@@ -261,24 +435,112 @@ model UserActivityLog {
 }
 
 // ============================================================================
-// WALLET ADDRESSES
+// ASSETS, NETWORKS, ASSET-NETWORKS
 // ============================================================================
+//
+// Replaces the old `CryptoAsset` and `CryptoNetwork` enums with dynamic
+// reference tables so admins can add coins (SOL, ARB, AVAX...) and chains
+// (SOLANA, ARBITRUM, BASE...) at runtime without redeploying.
+//
+// Relationship model:
+//   - Asset           = one coin (BTC, USDT...). Symbol immutable post-create.
+//   - Network         = one chain (BITCOIN, ETHEREUM, TRON...). Code immutable.
+//   - AssetNetwork    = many-to-many join. Holds per-pair config:
+//                       contract address, decimals override, deposit/withdrawal
+//                       limits, fee, confirmations required.
+//
+// Wallets and Transactions reference `assetNetworkId` (one FK) instead of
+// separate (asset, network) columns — guarantees the combination is valid
+// by construction.
 
-model WalletAddress {
-  id          String        @id @default(cuid())
-  cryptoAsset CryptoAsset   @map("crypto_asset")
-  network     CryptoNetwork
-  address     String
-  label       String?
-  isActive    Boolean       @default(true) @map("is_active")
+model Asset {
+  id        String  @id @default(cuid())
+  symbol    String  @unique // "BTC", "USDT" — uppercase, IMMUTABLE post-create
+  name      String // "Bitcoin", "Tether USD"
+  decimals  Int // canonical decimals (8 for BTC, 18 for ETH, 6 for USDT)
+  iconUrl   String? @map("icon_url")
+  isEnabled Boolean @default(true) @map("is_enabled")
+  sortOrder Int     @default(0) @map("sort_order")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  networks      AssetNetwork[]
+  exchangeRates ExchangeRate[]
+
+  @@index([isEnabled, sortOrder])
+  @@map("assets")
+}
+
+model Network {
+  id                  String  @id @default(cuid())
+  code                String  @unique // "ETHEREUM", "TRON" — uppercase, IMMUTABLE post-create
+  name                String // "Ethereum", "Tron"
+  chainId             Int?    @map("chain_id") // EVM chain id; null for non-EVM
+  explorerUrlTemplate String? @map("explorer_url_template") // "https://etherscan.io/tx/{txHash}"
+  nativeAssetSymbol   String? @map("native_asset_symbol") // "ETH", "TRX" — display only
+  isEnabled           Boolean @default(true) @map("is_enabled")
+  sortOrder           Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  assets AssetNetwork[]
+
+  @@index([isEnabled, sortOrder])
+  @@map("networks")
+}
+
+// Per (asset, network) pair config. Owns the values that vary between
+// chains for the same coin: USDT on Tron has a different contract address,
+// minimums, and fees than USDT on Ethereum.
+model AssetNetwork {
+  id                    String   @id @default(cuid())
+  assetId               String   @map("asset_id")
+  networkId             String   @map("network_id")
+  contractAddress       String?  @map("contract_address") // null for native coins (BTC on Bitcoin, ETH on Ethereum)
+  decimals              Int? // override Asset.decimals when this network differs (rare)
+  minDeposit            Decimal? @map("min_deposit") @db.Decimal(36, 18)
+  minWithdrawal         Decimal? @map("min_withdrawal") @db.Decimal(36, 18)
+  withdrawalFee         Decimal? @map("withdrawal_fee") @db.Decimal(36, 18)
+  confirmationsRequired Int      @default(1) @map("confirmations_required")
+  isEnabled             Boolean  @default(true) @map("is_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  network Network @relation(fields: [networkId], references: [id], onDelete: Restrict)
+
+  walletAddresses    WalletAddress[]
+  transactions       Transaction[]   @relation("TxPrimaryAssetNetwork")
+  swapToTransactions Transaction[]   @relation("TxToAssetNetwork")
+
+  @@unique([assetId, networkId])
+  @@index([assetId, isEnabled])
+  @@index([networkId, isEnabled])
+  @@map("asset_networks")
+}
+
+// ============================================================================
+// WALLET ADDRESSES
+// ============================================================================
+
+model WalletAddress {
+  id             String  @id @default(cuid())
+  assetNetworkId String  @map("asset_network_id")
+  address        String
+  label          String?
+  isActive       Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  assetNetwork AssetNetwork  @relation(fields: [assetNetworkId], references: [id], onDelete: Restrict)
   transactions Transaction[]
 
-  @@unique([cryptoAsset, network, address])
-  @@index([cryptoAsset, network, isActive])
+  @@unique([assetNetworkId, address])
+  @@index([assetNetworkId, isActive])
   @@map("wallet_addresses")
 }
 
@@ -290,20 +552,20 @@ model Transaction {
   id            String @id @default(cuid())
   referenceCode String @unique @map("reference_code") // service generates XCN-XXXXXXXX
 
-  userId String @map("user_id")
+  userId String            @map("user_id")
   type   TransactionType
   status TransactionStatus @default(PENDING)
 
-  // For BUY/SELL: the single asset traded. For SWAP: the FROM asset.
-  cryptoAsset  CryptoAsset   @map("crypto_asset")
-  network      CryptoNetwork
-  cryptoAmount Decimal       @map("crypto_amount") @db.Decimal(36, 18)
+  // For BUY/SELL: the single asset-network traded. For SWAP: the FROM side.
+  // Single FK guarantees the (asset, network) combination is a valid pair —
+  // can't reference a coin on a chain that doesn't support it.
+  assetNetworkId String  @map("asset_network_id")
+  cryptoAmount   Decimal @map("crypto_amount") @db.Decimal(36, 18)
 
-  // SWAP-only fields. Null for BUY/SELL.
-  toAsset   CryptoAsset?   @map("to_asset")
-  toNetwork CryptoNetwork? @map("to_network")
-  toAmount  Decimal?       @map("to_amount") @db.Decimal(36, 18)
-  toAddress String?        @map("to_address") // user's destination wallet for SWAP
+  // SWAP-only field. Null for BUY/SELL.
+  toAssetNetworkId String?  @map("to_asset_network_id")
+  toAmount         Decimal? @map("to_amount") @db.Decimal(36, 18)
+  toAddress        String?  @map("to_address") // user's destination wallet for SWAP
 
   // Fiat side: only populated for BUY/SELL.
   fiatAmount   Decimal? @map("fiat_amount") @db.Decimal(20, 2)
@@ -328,16 +590,21 @@ model Transaction {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  user          User               @relation(fields: [userId], references: [id])
-  walletAddress WalletAddress?     @relation(fields: [walletAddressId], references: [id])
-  approvedBy    User?              @relation("ApprovedTransactions", fields: [approvedById], references: [id])
-  proofs        TransactionProof[]
-  payout        Payout?
+  user               User                @relation(fields: [userId], references: [id])
+  walletAddress      WalletAddress?      @relation(fields: [walletAddressId], references: [id])
+  approvedBy         User?               @relation("ApprovedTransactions", fields: [approvedById], references: [id])
+  assetNetwork       AssetNetwork        @relation("TxPrimaryAssetNetwork", fields: [assetNetworkId], references: [id], onDelete: Restrict)
+  toAssetNetwork     AssetNetwork?       @relation("TxToAssetNetwork", fields: [toAssetNetworkId], references: [id], onDelete: Restrict)
+  proofs             TransactionProof[]
+  payout             Payout?
+  referralCommission ReferralCommission?
 
   @@index([userId, createdAt])
   @@index([status])
   @@index([type, status])
   @@index([referenceCode])
+  @@index([assetNetworkId])
+  @@index([toAssetNetworkId])
   @@map("transactions")
 }
 
@@ -393,22 +660,28 @@ model Payout {
 // EXCHANGE RATES
 // ============================================================================
 
+// Rates are per-ASSET, not per-asset-network. Buy/sell of BTC doesn't differ
+// by which chain the user holds it on — the rate is set against the fiat
+// (NGN) regardless of network. If that ever changes (e.g. liquidity differs
+// per network and we want per-network pricing), this model would gain an
+// optional assetNetworkId column. Not needed today.
 model ExchangeRate {
-  id               String      @id @default(cuid())
-  asset            CryptoAsset
-  fiatCurrency     String      @default("NGN") @map("fiat_currency")
-  buyRate          Decimal     @map("buy_rate") @db.Decimal(20, 2)
-  sellRate         Decimal     @map("sell_rate") @db.Decimal(20, 2)
+  id               String  @id @default(cuid())
+  assetId          String  @map("asset_id")
+  fiatCurrency     String  @default("NGN") @map("fiat_currency")
+  buyRate          Decimal @map("buy_rate") @db.Decimal(20, 2)
+  sellRate         Decimal @map("sell_rate") @db.Decimal(20, 2)
   source           String?
-  isManualOverride Boolean     @default(false) @map("is_manual_override")
+  isManualOverride Boolean @default(false) @map("is_manual_override")
 
   updatedById String? @map("updated_by_id")
 
   fetchedAt DateTime @default(now()) @map("fetched_at")
 
+  asset     Asset @relation(fields: [assetId], references: [id], onDelete: Restrict)
   updatedBy User? @relation(fields: [updatedById], references: [id])
 
-  @@index([asset, fiatCurrency, fetchedAt])
+  @@index([assetId, fiatCurrency, fetchedAt])
   @@map("exchange_rates")
 }
 
@@ -434,6 +707,58 @@ model AdminLog {
   @@index([adminId, createdAt])
   @@index([entityType, entityId])
   @@map("admin_logs")
+}
+
+// ============================================================================
+// PII ACCESS LOGS
+// ============================================================================
+// Dedicated audit trail for reads / writes / exports of Personally Identifiable
+// Information. Distinct from AdminLog (which is general admin actions) and
+// UserActivityLog (which is end-user actions) because PII access has stricter
+// compliance requirements under NDPR / GDPR — regulators want to be able to
+// answer "who looked at this customer's data, when, and why?" without sifting
+// through other event types.
+//
+// Logged events should include (non-exhaustive):
+//   - Admin opens a customer's profile         resourceType=PROFILE, action=READ
+//   - Admin lists customers                    resourceType=PROFILE, action=LIST
+//   - Admin views a customer's bank account    resourceType=BANK_ACCOUNT, action=READ
+//   - Admin updates a customer's profile/role  resourceType=PROFILE, action=UPDATE
+//   - Admin invites new staff                  resourceType=PROFILE, action=CREATE
+//   - System exports PII (CSV, GDPR portability) resourceType=PROFILE, action=EXPORT
+//   - Anonymization                            resourceType=PROFILE, action=ANONYMIZE
+//
+// Self-reads (a user fetching their own profile) are NOT logged here — they
+// are the normal product flow, not a compliance event. Audit them via
+// UserActivityLog or session logs instead.
+//
+// `actorUserId` may be null for system-initiated reads (e.g. scheduled
+// anonymization job, automated KYC processor). `targetUserId` is required.
+
+model PiiAccessLog {
+  id           String  @id @default(cuid())
+  actorUserId  String? @map("actor_user_id") // null = system
+  targetUserId String  @map("target_user_id")
+
+  resourceType String  @map("resource_type") // PROFILE | BANK_ACCOUNT | USER | STAFF | ...
+  resourceId   String? @map("resource_id") // e.g. specific bank account id, optional
+
+  action   String // READ | LIST | UPDATE | CREATE | EXPORT | ANONYMIZE
+  reason   String? // optional justification ("KYC review", "support ticket #...")
+  metadata Json?
+
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  actor  User? @relation("PiiAccessActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  target User  @relation("PiiAccessTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@index([actorUserId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([resourceType, action])
+  @@map("pii_access_logs")
 }
 
 // ============================================================================
@@ -558,4 +883,44 @@ model Notification {
   @@index([userId, status])
   @@index([userId, createdAt])
   @@map("notifications")
+}
+
+// ============================================================================
+// REFERRAL COMMISSIONS
+// ============================================================================
+// One row per qualifying transaction that earned a referrer commission.
+// 1:1 with Transaction (the @unique on transaction_id) — a single trade
+// produces at most one commission row.
+//
+// `ratePercent` is stored as a Decimal even though it's currently constant
+// (0.001 = 0.1%) so that we have historical clarity if the rate is ever
+// changed: rows created at the old rate keep the old rate stamped.
+//
+// `basisAmount` and `basisCurrency` snapshot the trade size at credit time,
+// so commissions remain meaningful even if the source Transaction is later
+// refunded/reversed (we'd then null out `amount` or mark the row reversed
+// — TBD when refund flow is built).
+
+model ReferralCommission {
+  id String @id @default(cuid())
+
+  referrerId    String @map("referrer_id") // who earns
+  refereeId     String @map("referee_id") // whose trade generated this
+  transactionId String @unique @map("transaction_id") // the trade itself
+
+  // Money
+  amount        Decimal @db.Decimal(20, 2) // NGN commission credited
+  basisAmount   Decimal @map("basis_amount") @db.Decimal(20, 2) // fiatAmount of the trade
+  basisCurrency String  @default("NGN") @map("basis_currency")
+  ratePercent   Decimal @map("rate_percent") @db.Decimal(5, 4) // e.g. 0.0010 = 0.1%
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  referrer    User        @relation("CommissionEarner", fields: [referrerId], references: [id])
+  referee     User        @relation("CommissionSource", fields: [refereeId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@index([referrerId, createdAt])
+  @@index([refereeId, createdAt])
+  @@map("referral_commissions")
 }

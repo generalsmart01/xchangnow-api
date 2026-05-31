@@ -1,3 +1,52 @@
+// src/modules/auth/auth.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *   POST   /auth/register             body: RegisterDto
+ *                                     201:  { user, verifyToken? (dev) }
+ *                                     400:  validation
+ *                                     409:  email or phone already registered
+ *
+ *   POST   /auth/login                body: LoginDto
+ *                                     200:  { user, tokens }
+ *                                     401:  invalid creds / unverified / suspended / rate-limited
+ *
+ *   POST   /auth/refresh              body: { refreshToken }
+ *                                     200:  { tokens } (rotated)
+ *                                     401:  invalid / revoked / expired
+ *
+ *   POST   /auth/logout               JWT required
+ *                                     204:  session revoked
+ *                                     401:  missing/invalid access token
+ *
+ *   GET    /auth/me                   JWT required
+ *                                     200:  { id, email, role, sessionId }
+ *
+ *   POST   /auth/verify-email         body: { token }
+ *                                     200:  { message }
+ *                                     400:  token invalid / expired
+ *
+ *   POST   /auth/resend-verification  body: { email }
+ *                                     200:  generic message (no enumeration)
+ *
+ *   POST   /auth/forgot-password      body: { email }
+ *                                     200:  generic message (+ resetToken in dev)
+ *
+ *   POST   /auth/reset-password       body: { token, newPassword }
+ *                                     200:  { message } — ALL sessions revoked
+ *                                     400:  token invalid / used / expired
+ *
+ *   POST   /auth/accept-invite        body: { token, password }
+ *                                     200:  { message } — staff account activated
+ *                                     400:  token invalid / used / expired
+ *
+ * All responses are wrapped in the standard envelope by ResponseInterceptor:
+ *   { success, message, data, meta: { requestId, timestamp, durationMs, path } }
+ * Error responses by AllExceptionsFilter:
+ *   { success: false, message, data: null, error: { code, details[] }, meta }
+ */
+
 import {
   Body,
   Controller,
@@ -18,6 +67,7 @@ import { Request } from 'express';
 import { LogMessage } from '../../common/decorators/log-message.decorator';
 import { AuthService, SessionContext } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { AcceptInviteDto } from './dto/accept-invite.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
@@ -31,7 +81,7 @@ import { AuthenticatedUser } from './interfaces/jwt-payload.interface';
 // Shared response shapes used across endpoints for richer Swagger examples.
 const AUTH_USER_EXAMPLE = {
   id: 'cmpgx5qjh0000o85kzmyj8zpy',
-  email: 'michael@xchangenow.com',
+  email: 'michael@xchangnow.com',
   phoneNumber: '+2348012345678',
   firstName: 'Michael',
   lastName: 'Adeleke',
@@ -52,11 +102,37 @@ const AUTH_TOKENS_EXAMPLE = {
   refreshExpiresIn: '7d',
 };
 
+/**
+ * AuthController — owns the user-facing authentication surface.
+ *
+ * Most endpoints here are PUBLIC (no JWT) because they're the entry points
+ * by which a session is established (register, login, password reset). The
+ * exceptions are `logout` and `me`, which need a valid access token because
+ * they operate on the current session.
+ *
+ * No business logic lives here — every handler delegates to AuthService.
+ * The controller's job is HTTP wiring + Swagger annotations + log labels.
+ *
+ * Security posture:
+ *   - Generic responses on `resend-verification` and `forgot-password` to
+ *     prevent account enumeration (same 200 regardless of whether the email
+ *     exists)
+ *   - Strict login gate — PENDING_VERIFICATION accounts get a specific 401
+ *     with a distinct message so the FE can show a "Resend verification" CTA
+ *   - Verify-email and reset-password tokens are HASHED at rest (SHA-256);
+ *     the raw token only exists in the email link
+ */
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
+  /**
+   * Create a new account. Sends a verification email; does NOT issue tokens
+   * (strict-gate policy — user must verify their email before they can log
+   * in). The response includes the raw `verifyToken` ONLY in development
+   * mode so smoke tests can complete the flow without scraping the email log.
+   */
   @Post('register')
   @LogMessage('User registered')
   @ApiOperation({
@@ -180,7 +256,7 @@ export class AuthController {
     schema: {
       example: {
         id: 'cmpgx5qjh0000o85kzmyj8zpy',
-        email: 'michael@xchangenow.com',
+        email: 'michael@xchangnow.com',
         role: 'USER',
         sessionId: 'cmpg9k3lk0009o84wjn521kk4',
       },
@@ -263,6 +339,37 @@ export class AuthController {
   })
   forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.auth.forgotPassword(dto.email);
+  }
+
+  @Post('accept-invite')
+  @LogMessage('Staff invite accepted')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Accept a staff invite (set password + activate)',
+    description:
+      'Called by an invited staff member from the frontend\'s /accept-invite ' +
+      'page. The page reads `?token=...` from the URL and POSTs it here with ' +
+      'the new password. On success: user\'s status flips PENDING_VERIFICATION ' +
+      '→ ACTIVE, `isEmailVerified` becomes true, `passwordHash` is set, and ' +
+      'the invite token is marked used. After this call the staff member must ' +
+      'POST /auth/login normally to get tokens (no auto-login).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Invite accepted; account activated.',
+    schema: {
+      example: {
+        message:
+          'Invite accepted. Your account is active — please log in with your new password.',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid invite token, token already used, or token expired (>24h).',
+  })
+  acceptInvite(@Body() dto: AcceptInviteDto) {
+    return this.auth.acceptInvite(dto.token, dto.password);
   }
 
   @Post('reset-password')

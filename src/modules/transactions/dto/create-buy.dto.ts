@@ -1,23 +1,29 @@
+// src/modules/transactions/dto/create-buy.dto.ts
+
+/**
+ * Body schema for POST /transactions/buy.
+ *
+ * The client sends `fiatAmount` (what they want to spend in NGN) plus the
+ * `assetNetworkId` (the asset × network pair they want to receive crypto
+ * on); the server computes the crypto amount they'll receive using the
+ * current buyRate. Never trust the client to send the computed side.
+ *
+ * fiatAmount is a STRING with up to 2 decimal places (NGN cents) for the
+ * same precision reasons as SELL's cryptoAmount.
+ */
+
 import { ApiProperty } from '@nestjs/swagger';
-import { CryptoAsset, CryptoNetwork } from '@prisma/client';
-import { IsEnum, IsString, Matches, MaxLength } from 'class-validator';
+import { IsString, Matches, MaxLength } from 'class-validator';
 
 export class CreateBuyDto {
   @ApiProperty({
-    enum: CryptoAsset,
-    example: CryptoAsset.USDT,
-    description: 'The crypto asset the user wants to buy from us.',
+    example: 'cmpqe002b0001o81g8k7vmpqr',
+    description:
+      'FK to asset_networks.id — the asset × network combo the user wants to receive on. ' +
+      'Pair must be enabled. Look up via GET /assets.',
   })
-  @IsEnum(CryptoAsset)
-  cryptoAsset!: CryptoAsset;
-
-  @ApiProperty({
-    enum: CryptoNetwork,
-    example: CryptoNetwork.TRON,
-    description: 'Network on which the user wants to receive crypto.',
-  })
-  @IsEnum(CryptoNetwork)
-  network!: CryptoNetwork;
+  @IsString()
+  assetNetworkId!: string;
 
   @ApiProperty({
     example: '30000.00',

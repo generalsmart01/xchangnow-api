@@ -1,3 +1,14 @@
+// src/modules/auth/dto/reset-password.dto.ts
+
+/**
+ * Body schema for POST /auth/reset-password.
+ *
+ * On success the server atomically: swaps the password hash, marks the
+ * reset token used, REVOKES ALL active sessions for the user, and writes
+ * a PASSWORD_RESET security log row. Any outstanding refresh tokens
+ * become unusable — the user must log in again everywhere.
+ */
+
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, MaxLength, MinLength } from 'class-validator';
 

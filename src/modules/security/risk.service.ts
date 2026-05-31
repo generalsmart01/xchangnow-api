@@ -1,3 +1,17 @@
+// src/modules/security/risk.service.ts
+
+/**
+ * RiskService — pure scoring layer.
+ *
+ * Given IP intelligence + recent failed attempts, produces a 0-100 risk
+ * score and a severity bucket (LOW / MEDIUM / HIGH / CRITICAL). No side
+ * effects — no DB, no network calls. SecurityService composes this with
+ * its own DB-backed counters to produce the final allow/deny decision.
+ *
+ * Scoring weights are co-located here intentionally; tuning is one file
+ * to read + one test to update.
+ */
+
 import { Injectable } from '@nestjs/common';
 import { RiskSeverity } from '@prisma/client';
 import { IpIntel } from '../../integrations/ip-intel/ip-intel.service';

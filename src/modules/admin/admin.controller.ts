@@ -1,3 +1,16 @@
+// src/modules/admin/admin.controller.ts
+
+/**
+ * ─── Endpoints ──────────────────────────────────────────────────────────────
+ *
+ *   GET    /admin/ping           JWT + ADMIN | SUPER_ADMIN
+ *                                200: { ok: true, adminId, adminEmail, adminRole, checkedAt }
+ *
+ * Single purpose: confirm "I'm an admin and can hit admin-only routes" —
+ * useful for smoke-testing deploys + the auth chain. Not part of any
+ * real workflow.
+ */
+
 import { Controller, Get, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -36,7 +49,7 @@ export class AdminController {
         ok: true,
         message: 'Admin pong',
         adminId: 'cmpgx5qjh0000o85kzmyj8zpy',
-        adminEmail: 'admin@xchangenow.com',
+        adminEmail: 'admin@xchangnow.com',
         adminRole: 'ADMIN',
         checkedAt: '2026-05-22T14:30:00.000Z',
       },

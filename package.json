@@ -1,7 +1,7 @@
 {
-  "name": "xchangenow-api",
+  "name": "xchangnow-api",
   "version": "0.0.1",
-  "description": "XchangeNow fintech backend (NestJS)",
+  "description": "XchangNow fintech backend (NestJS)",
   "author": "Adeleke Michael Segun",
   "private": true,
   "license": "UNLICENSED",
@@ -32,6 +32,7 @@
     "class-validator": "^0.14.1",
     "helmet": "^8.1.0",
     "joi": "^17.13.3",
+    "libphonenumber-js": "^1.13.3",
     "multer": "^2.1.1",
     "nodemailer": "^8.0.7",
     "passport": "^0.7.0",
@@ -39,6 +40,9 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "uuid": "^14.0.0"
+  },
+  "prisma": {
+    "seed": "ts-node --transpile-only prisma/seed.ts"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.4.0",

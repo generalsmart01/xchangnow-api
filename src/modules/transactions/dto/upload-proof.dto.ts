@@ -1,3 +1,22 @@
+// src/modules/transactions/dto/upload-proof.dto.ts
+
+/**
+ * Body schema for POST /transactions/me/:id/proof.
+ *
+ * `type` must MATCH the transaction type — enforced server-side. A SELL
+ * with a BANK_TRANSFER_RECEIPT proof would be nonsensical and is rejected
+ * with 400 before any DB write.
+ *
+ * `value` is overloaded: for CRYPTO_TX_HASH it's the on-chain hash string,
+ * for BANK_TRANSFER_RECEIPT it's an HTTPS URL of the receipt image. The
+ * shape is the same; downstream consumers know which based on `type`.
+ * Length validation is permissive (10-500 chars) to accommodate both.
+ *
+ * For SELL/SWAP, the value is also mirrored to `transaction.txHash` —
+ * which has a system-wide @unique constraint, so the same on-chain hash
+ * cannot be claimed twice (anti-replay). Duplicate → 409.
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProofType } from '@prisma/client';
 import {

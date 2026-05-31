@@ -1,23 +1,31 @@
+// src/modules/transactions/dto/create-sell.dto.ts
+
+/**
+ * Body schema for POST /transactions/sell.
+ *
+ * `assetNetworkId` is a single FK to the asset × network pair the user is
+ * sending crypto on. cryptoAmount is a decimal STRING, not a number — JSON
+ * numbers > 2^53 lose precision and crypto amounts can easily exceed that
+ * (e.g. `0.005000000000000001`). The service parses with Prisma.Decimal
+ * which preserves all 18 decimal places.
+ *
+ * No fiat amount in the request — that's computed server-side from
+ * cryptoAmount × current sellRate. Never trust the client to send the
+ * fiat amount; rate manipulation would be catastrophic.
+ */
+
 import { ApiProperty } from '@nestjs/swagger';
-import { CryptoAsset, CryptoNetwork } from '@prisma/client';
-import { IsEnum, IsString, Matches, MaxLength } from 'class-validator';
+import { IsString, Matches, MaxLength } from 'class-validator';
 
 export class CreateSellDto {
   @ApiProperty({
-    enum: CryptoAsset,
-    example: CryptoAsset.BTC,
-    description: 'The crypto asset the user is selling to us.',
+    example: 'cmpqe002b0001o81g8k7vmpqr',
+    description:
+      'FK to asset_networks.id — the asset × network combo the user is sending crypto on. ' +
+      'Pair must be enabled and have an active company wallet.',
   })
-  @IsEnum(CryptoAsset)
-  cryptoAsset!: CryptoAsset;
-
-  @ApiProperty({
-    enum: CryptoNetwork,
-    example: CryptoNetwork.BITCOIN,
-    description: 'Network the user will send crypto on. Must match asset.',
-  })
-  @IsEnum(CryptoNetwork)
-  network!: CryptoNetwork;
+  @IsString()
+  assetNetworkId!: string;
 
   @ApiProperty({
     example: '0.005',
@@ -27,7 +35,6 @@ export class CreateSellDto {
       'Up to 18 decimal places.',
     pattern: '^\\d+(\\.\\d{1,18})?$',
   })
-  // String to preserve precision — JSON numbers > 2^53 lose digits.
   @IsString()
   @Matches(/^\d+(\.\d{1,18})?$/, {
     message: 'cryptoAmount must be a decimal number with up to 18 decimals',

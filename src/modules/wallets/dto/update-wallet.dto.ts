@@ -1,8 +1,17 @@
+// src/modules/wallets/dto/update-wallet.dto.ts
+
+/**
+ * Body schema for PATCH /wallets/:id (admin).
+ *
+ * Only `label` and `isActive` are mutable. address/asset/network are
+ * effectively identity fields — changing them would orphan historical
+ * transactions that reference the wallet. To "change" an address: deactivate
+ * the old wallet, create a new one.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
 
-// Address / asset / network are NOT updatable. Changing those would
-// break the address ↔ transaction relationship. Delete and recreate instead.
 export class UpdateWalletDto {
   @ApiPropertyOptional({
     example: 'BTC retired wallet',

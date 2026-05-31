@@ -1,6 +1,20 @@
+// src/modules/transactions/dto/list-transactions-query.dto.ts
+
+/**
+ * Query schema for GET /transactions (admin) and /transactions/me (self).
+ *
+ * The same DTO serves both endpoints — the controller passes the caller's
+ * userId for the /me variant, the admin variant doesn't. The `userId`
+ * filter field is admin-only (admins can filter to a specific user); the
+ * service ignores it on /me routes to prevent privilege escalation.
+ *
+ * `assetId` / `assetNetworkId` filter by the PRIMARY side (BUY/SELL asset
+ * or SWAP from-side). To find SWAPs by the receive-side, you'd need a
+ * separate filter — not implemented; admins can sort/inspect after listing.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  CryptoAsset,
   TransactionStatus,
   TransactionType,
 } from '@prisma/client';
@@ -49,13 +63,20 @@ export class ListTransactionsQueryDto {
   type?: TransactionType;
 
   @ApiPropertyOptional({
-    enum: CryptoAsset,
-    example: CryptoAsset.BTC,
-    description: 'Filter by crypto asset.',
+    example: 'cmpqd99zz0000o81g4kq8jz5x',
+    description: 'Filter by primary assetId (the BUY/SELL asset or SWAP from-side asset).',
   })
   @IsOptional()
-  @IsEnum(CryptoAsset)
-  asset?: CryptoAsset;
+  @IsString()
+  assetId?: string;
+
+  @ApiPropertyOptional({
+    example: 'cmpqe002b0001o81g8k7vmpqr',
+    description: 'Filter by primary assetNetworkId (more specific than assetId).',
+  })
+  @IsOptional()
+  @IsString()
+  assetNetworkId?: string;
 
   @ApiPropertyOptional({
     example: 'cmpgx5qjh0000o85kzmyj8zpy',

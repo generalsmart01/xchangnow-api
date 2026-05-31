@@ -1,26 +1,48 @@
+// src/integrations/email/email.service.ts
+
+/**
+ * EmailService — outbound transactional email.
+ *
+ * Sends via nodemailer when SMTP env vars are set; otherwise falls back
+ * to console logging (dev-friendly — no SMTP needed to develop locally).
+ *
+ * Public methods:
+ *   - sendVerificationEmail(to, token)   verify-email link, 24h TTL
+ *   - sendPasswordResetEmail(to, token)  password-reset link, 1h TTL
+ *   - sendInviteEmail(to, token, opts)   staff invite link, 24h TTL
+ *
+ * All links point at the FRONTEND (FRONTEND_URL env var), not the backend.
+ * The frontend pages /verify-email, /reset-password, /accept-invite
+ * extract the token from the URL and POST it to the backend.
+ *
+ * Boot-time SMTP verification: if SMTP_* are set, the constructor's
+ * onModuleInit hook calls transporter.verify() and fails loudly on bad
+ * credentials. Better to crash at boot than silently drop password resets
+ * for a week before noticing.
+ *
+ * Env vars (all optional — leave unset to keep console-logging):
+ *   SMTP_HOST     e.g. smtp.gmail.com, sandbox.smtp.mailtrap.io
+ *   SMTP_PORT     typically 587 (STARTTLS) or 465 (SSL)
+ *   SMTP_USER     auth username
+ *   SMTP_PASS     auth password / app-password / API key
+ *   EMAIL_FROM    the From address (must match SMTP_USER for Gmail or it
+ *                 gets rewritten)
+ *   FRONTEND_URL  used to build the user-facing links inside emails
+ *
+ * Drop-in providers tested: Mailtrap (dev/staging), Gmail SMTP. Production
+ * options: Resend, Mailgun, Postmark, SendGrid.
+ */
+
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
-/**
- * EmailService — sends emails via nodemailer when SMTP env vars are set,
- * otherwise falls back to console logging (dev-friendly).
- *
- * Env vars (all optional — leave unset to keep console-logging behaviour):
- *   SMTP_HOST    e.g. smtp.gmail.com, sandbox.smtp.mailtrap.io, smtp.resend.com
- *   SMTP_PORT    typically 587 (STARTTLS) or 465 (SSL)
- *   SMTP_USER    auth username
- *   SMTP_PASS    auth password / app-password / API key
- *   EMAIL_FROM   the From address, e.g. 'XchangeNow <no-reply@xchangenow.com>'
- *
- * Drop-in providers: Mailtrap (dev/staging sandbox), Resend, SendGrid, Mailgun,
- * Gmail SMTP with app password.
- */
+
 @Injectable()
 export class EmailService implements OnModuleInit {
   private readonly logger = new Logger(EmailService.name);
   private transporter: nodemailer.Transporter | null = null;
-  private fromAddress = 'XchangeNow <no-reply@xchangenow.com>';
+  private fromAddress = 'XchangNow <no-reply@xchangnow.com>';
 
   constructor(private readonly config: ConfigService) {}
 
@@ -79,9 +101,9 @@ export class EmailService implements OnModuleInit {
 
     await this.send({
       to,
-      subject: 'Verify your XchangeNow email',
+      subject: 'Verify your XchangNow email',
       text: [
-        'Welcome to XchangeNow.',
+        'Welcome to XchangNow.',
         '',
         'Click the link below to verify your email address:',
         verifyUrl,
@@ -90,9 +112,46 @@ export class EmailService implements OnModuleInit {
       ].join('\n'),
       html: this.htmlTemplate({
         title: 'Verify your email',
-        intro: 'Welcome to XchangeNow! Confirm your email to activate your account.',
+        intro: 'Welcome to XchangNow! Confirm your email to activate your account.',
         cta: { label: 'Verify Email', url: verifyUrl, color: '#0F62FE' },
         footer: "Link expires in 24 hours. If you didn't sign up, you can ignore this.",
+      }),
+    });
+  }
+
+  async sendInviteEmail(
+    to: string,
+    rawToken: string,
+    opts: { inviterName: string; role: string },
+  ): Promise<void> {
+    // Link points at the frontend's /accept-invite page. Page reads
+    // ?token=... and posts to POST /api/auth/accept-invite with the token
+    // plus the password the invitee picks.
+    const base = this.config.get<string>('FRONTEND_URL', 'http://localhost:3001');
+    const acceptUrl = `${base}/accept-invite?token=${rawToken}`;
+
+    await this.send({
+      to,
+      subject: `You've been invited to XchangNow as ${opts.role}`,
+      text: [
+        `${opts.inviterName} has invited you to join the XchangNow team`,
+        `as a ${opts.role}.`,
+        '',
+        'Click the link below to set your password and activate your account:',
+        acceptUrl,
+        '',
+        "This invite expires in 24 hours. If you weren't expecting this email,",
+        'you can safely ignore it.',
+      ].join('\n'),
+      html: this.htmlTemplate({
+        title: 'Welcome to XchangNow',
+        intro:
+          `${opts.inviterName} has invited you to join the XchangNow team as a ` +
+          `<strong>${opts.role}</strong>. Click below to set your password and ` +
+          'activate your account.',
+        cta: { label: 'Accept Invite', url: acceptUrl, color: '#0F62FE' },
+        footer:
+          "Invite expires in 24 hours. If you weren't expecting this, you can ignore it.",
       }),
     });
   }
@@ -105,7 +164,7 @@ export class EmailService implements OnModuleInit {
 
     await this.send({
       to,
-      subject: 'Reset your XchangeNow password',
+      subject: 'Reset your XchangNow password',
       text: [
         'A password reset was requested for your account.',
         '',
@@ -117,7 +176,7 @@ export class EmailService implements OnModuleInit {
       html: this.htmlTemplate({
         title: 'Reset your password',
         intro:
-          'A password reset was requested for your XchangeNow account. ' +
+          'A password reset was requested for your XchangNow account. ' +
           'Click below to set a new password.',
         cta: { label: 'Reset Password', url: resetUrl, color: '#DA1E28' },
         footer:
@@ -226,7 +285,7 @@ export class EmailService implements OnModuleInit {
       </tr>
     </table>
     <p style="color:#aaa;font-size:11px;text-align:center;margin-top:16px;">
-      &copy; XchangeNow &middot; Lagos, Nigeria
+      &copy; XchangNow &middot; Lagos, Nigeria
     </p>
   </body>
 </html>`;

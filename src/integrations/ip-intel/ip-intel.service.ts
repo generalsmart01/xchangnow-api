@@ -1,3 +1,26 @@
+// src/integrations/ip-intel/ip-intel.service.ts
+
+/**
+ * IpIntelService — IP reputation lookup with DB-backed caching.
+ *
+ * For each IP we want to know: is it a VPN, a proxy, a Tor exit, a known
+ * data-center IP? These signals feed the login risk gate.
+ *
+ * Cache strategy: results are stored in `ip_reputation_logs` with a 24h
+ * TTL. A cache hit returns instantly; a miss calls the external provider
+ * and stores the result. Same IP queried twice within 24h costs us one
+ * external API call.
+ *
+ * Local/private IPs (127.x, 10.x, 192.168.x, etc.) short-circuit to a
+ * "safe" response without any provider call — they can't meaningfully
+ * be VPN/proxy because they're not on the public internet at all.
+ *
+ * If the external provider is down or rate-limits us, the service
+ * returns a benign default (all flags false, riskScore 0) rather than
+ * blocking login. Better to occasionally let through a VPN user than
+ * to lock everyone out because our IP provider had a bad afternoon.
+ */
+
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 

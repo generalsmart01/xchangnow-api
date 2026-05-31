@@ -1,3 +1,27 @@
+// src/modules/auth/guards/verified.guard.ts
+
+/**
+ * VerifiedGuard — gates financial operations behind email verification.
+ *
+ * Why a separate guard from JwtAuthGuard:
+ *   - Authenticated ≠ verified. Under the strict login policy a brand-new
+ *     PENDING_VERIFICATION user can't log in at all, so this is mostly a
+ *     defense-in-depth check. But it ALSO catches the case where a user
+ *     was active, then admin moved them back to PENDING_VERIFICATION for
+ *     re-KYC, and their old token is still floating around.
+ *   - Lets us scope the verification requirement per-route via
+ *     @RequireVerified(). Read-only routes (profile fetch, transaction
+ *     history) don't need it; only money-moving routes (sell, buy, swap,
+ *     proof upload) do.
+ *
+ * Why a fresh DB lookup instead of reading from the JWT:
+ *   A user who verifies AFTER their token was issued should immediately
+ *   gain access to financial endpoints — they shouldn't have to log out
+ *   and back in. Reading isEmailVerified from DB each time the guard fires
+ *   gives us that. Cost: one extra SELECT per protected request. Acceptable
+ *   trade for UX.
+ */
+
 import {
   CanActivate,
   ExecutionContext,
@@ -9,15 +33,6 @@ import { PrismaService } from '../../../database/prisma.service';
 import { REQUIRE_VERIFIED_KEY } from '../decorators/require-verified.decorator';
 import { AuthenticatedUser } from '../interfaces/jwt-payload.interface';
 
-/**
- * Blocks the route if the authenticated user's email isn't verified.
- *
- * Only enforces when @RequireVerified() is present on the handler or class —
- * otherwise it's a no-op. Pair with JwtAuthGuard upstream so request.user is set.
- *
- * Uses a fresh DB lookup rather than reading from the JWT, so a user who
- * verifies *after* their token was issued doesn't have to re-login.
- */
 @Injectable()
 export class VerifiedGuard implements CanActivate {
   constructor(

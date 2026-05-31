@@ -1,3 +1,18 @@
+// src/modules/bank-accounts/dto/update-bank-account.dto.ts
+
+/**
+ * Body schema for PATCH /bank-accounts/me/:id.
+ *
+ * Mirrors CreateBankAccountDto but every field is optional — only the
+ * specified fields are written. Setting `isDefault=true` atomically
+ * unsets the previous default in the same transaction (matches the create
+ * behavior).
+ *
+ * Kept as an explicit class rather than `PartialType(CreateBankAccountDto)`
+ * to avoid the @nestjs/mapped-types dep and to keep the validation rules
+ * fully visible in this file (no inheritance to chase).
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
@@ -8,8 +23,6 @@ import {
   MinLength,
 } from 'class-validator';
 
-// Same fields as create, all optional.
-// Kept explicit instead of using @nestjs/mapped-types to avoid an extra dep.
 export class UpdateBankAccountDto {
   @ApiPropertyOptional({
     example: 'Access Bank',

@@ -1,3 +1,19 @@
+// src/modules/payouts/dto/update-payout-status.dto.ts
+
+/**
+ * Body schema for PATCH /payouts/:id/status (admin).
+ *
+ * The service rejects illegal transitions with 400 — see
+ * payouts.service.ts ALLOWED_TRANSITIONS map for the legal graph.
+ *
+ * `failureReason` is meaningful only on FAILED transitions; defaults to
+ * "No reason provided" if omitted (the service does the substitution).
+ *
+ * `reference` is an external bank/processor reference. Typically set when
+ * moving to PROCESSING (the bank-side transfer kicked off). Stored on the
+ * payout for later reconciliation against bank statements.
+ */
+
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PayoutStatus } from '@prisma/client';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';

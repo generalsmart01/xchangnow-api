@@ -1,3 +1,12 @@
+// src/modules/payouts/dto/list-payouts-query.dto.ts
+
+/**
+ * Query schema for GET /payouts (admin) and /payouts/me (self).
+ *
+ * Same dual-purpose pattern as ListTransactionsQueryDto — `userId` filter
+ * is only honored on the admin route; the /me route scopes by the caller.
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { PayoutStatus } from '@prisma/client';
 import { Type } from 'class-transformer';

@@ -1,8 +1,16 @@
+// src/modules/rates/dto/list-rates-query.dto.ts
+
+/**
+ * Query schema for GET /rates (admin paginated rate history).
+ *
+ * Ordered newest first. Filters by assetId and/or fiatCurrency are useful
+ * when an admin wants to inspect "how has the BTC/NGN rate moved over
+ * the last 24 hours?"
+ */
+
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { CryptoAsset } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
-  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -27,13 +35,12 @@ export class ListRatesQueryDto {
   pageSize?: number = 20;
 
   @ApiPropertyOptional({
-    enum: CryptoAsset,
-    example: CryptoAsset.BTC,
-    description: 'Filter by asset to see only that asset\'s rate history.',
+    example: 'cmpqd99zz0000o81g4kq8jz5x',
+    description: 'Filter by assetId (cuid) to see only that asset\'s rate history.',
   })
   @IsOptional()
-  @IsEnum(CryptoAsset)
-  asset?: CryptoAsset;
+  @IsString()
+  assetId?: string;
 
   @ApiPropertyOptional({
     example: 'NGN',

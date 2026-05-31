@@ -1,3 +1,23 @@
+// src/config/env.validation.ts
+
+/**
+ * Joi schema validated by @nestjs/config at boot. Anything missing or
+ * malformed makes Nest crash IMMEDIATELY with a clear error — better to
+ * fail loud at startup than discover at first request that JWT_SECRET is
+ * empty.
+ *
+ * Boot order:
+ *   1. ConfigModule.forRoot loads .env into process.env
+ *   2. This schema validates the resulting env
+ *   3. If invalid → process exits before any controller is registered
+ *
+ * Conventions:
+ *   - Required: anything the API cannot start without (DB URL, JWT secrets)
+ *   - Optional with defaults: things with a sensible fallback (port, expiry)
+ *   - Optional without defaults: features that "degrade gracefully" if unset
+ *     (SMTP — falls back to console; KYC keys — throw only at first BVN write)
+ */
+
 import * as Joi from 'joi';
 
 export const envValidationSchema = Joi.object({
@@ -29,4 +49,47 @@ export const envValidationSchema = Joi.object({
   SMTP_USER: Joi.string().optional(),
   SMTP_PASS: Joi.string().optional(),
   EMAIL_FROM: Joi.string().optional(),
+
+  // ─── First SUPER_ADMIN bootstrap (Phase 1) ─────────────────────────────
+  // Used by prisma/seed.ts to create the very first SUPER_ADMIN on initial
+  // deploy. Both optional — if EITHER is unset the seed exits cleanly without
+  // crashing (so you can REMOVE these env vars after the first successful
+  // deploy and subsequent deploys won't error or overwrite anything).
+  //
+  // Password rule is stricter than the regular RegisterDto (12+ chars) because
+  // admin credentials are higher-value than user credentials.
+  SUPER_ADMIN_EMAIL: Joi.string().email().optional(),
+  SUPER_ADMIN_PASSWORD: Joi.string().min(12).optional(),
+
+  // ─── HTTP bootstrap endpoint (POST /admin/bootstrap) ───────────────────
+  // Alternative path to seed the first SUPER_ADMIN — useful on hosting tiers
+  // where you can't run `prisma db seed` (e.g. Render free tier without
+  // shell access). The endpoint refuses unless this env var is set AND
+  // matches the request body's `secret` (timing-safe compare).
+  //
+  // Generate with:
+  //   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+  //
+  // Once a SUPER_ADMIN exists, the endpoint refuses regardless. Best
+  // practice: REMOVE this env var after the first successful bootstrap so
+  // the endpoint becomes a permanent 404.
+  BOOTSTRAP_SECRET: Joi.string().min(32).optional(),
+
+  // ─── KYC encryption keys ───────────────────────────────────────────────
+  // Required for storing BVN / NIN. Without these, the encrypt/decrypt/hash
+  // helpers throw at call time — meaning the app can boot in dev without KYC
+  // set up, but the first BVN write will fail loudly with a clear error
+  // rather than silently storing a useless empty string.
+  //
+  // Both keys MUST be 32 bytes (256 bits) of entropy, base64-encoded:
+  //   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+  //
+  // Run that command twice — once per key, NEVER reuse. Treat with the same
+  // care as JWT secrets:
+  //   - never commit to git
+  //   - never reuse across dev/staging/production
+  //   - rotation requires re-encrypting all bvn_encrypted / nin_encrypted
+  //     rows, so plan carefully before changing in production
+  KYC_ENCRYPTION_KEY: Joi.string().base64().optional(),
+  KYC_HASH_KEY: Joi.string().base64().optional(),
 });
